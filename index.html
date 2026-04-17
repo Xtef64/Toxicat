@@ -1000,6 +1000,18 @@ async function doAnalyze() {
     </div>`);
 
   try {
+    // ── STEP 1: Check offline DB first (free, instant) ──
+    if (query && !imgBase64) {
+      const dbHit = searchDB(query);
+      if (dbHit) {
+        const result = dbResultToResult(dbHit, curLang);
+        renderResult(result, query);
+        document.getElementById('btnAnalyze').disabled = false;
+        return;
+      }
+    }
+    // ── STEP 2: Not in DB or has image → call API ──
+
     // Build message content
     const content = [];
     if (imgBase64) {
@@ -1122,6 +1134,15 @@ function renderResult(r, query) {
   `);
 
   addToLog({ name: r.plant_name, toxicity: r.toxicity, date: new Date().toLocaleDateString(), query });
+  const badge = r.fromDB
+    ? `<div style="text-align:center;margin-top:5px;font-size:10px;color:var(--text3)">⚡ Base locale · Gratuit</div>`
+    : `<div style="text-align:center;margin-top:5px;font-size:10px;color:var(--text3)">🤖 Claude Sonnet · IA</div>`;
+  document.getElementById('resultArea').insertAdjacentHTML('beforeend', badge);
+  // Source badge
+  const srcBadge = r.fromDB
+    ? `<div style="text-align:center;margin-top:6px;font-size:10px;color:var(--text3)">⚡ Réponse instantanée · Base locale</div>`
+    : `<div style="text-align:center;margin-top:6px;font-size:10px;color:var(--text3)">🤖 Analysé par IA · Claude Sonnet</div>`;
+  document.getElementById('resultArea').insertAdjacentHTML('beforeend', srcBadge);
 }
 
 function setResult(html) {
@@ -1220,6 +1241,1413 @@ function injectManifest() {
   changeLang(lang);
   // BUG FIX: renderHist already called inside changeLang — no double call
 })();
+
+/* ─────────────────────────────────────────────────────
+   OFFLINE PLANT DATABASE + FUZZY SEARCH
+   Returns match or null → falls back to API
+───────────────────────────────────────────────────── */
+const PLANT_DB = [
+  {
+    "names": [
+      "lys",
+      "lily",
+      "lirio",
+      "lilie",
+      "giglio",
+      "lírio",
+      "lirioa",
+      "lilium",
+      "lis",
+      "lys tigré",
+      "lys asiatique",
+      "lys oriental",
+      "easter lily",
+      "tiger lily",
+      "asian lily"
+    ],
+    "toxicity": "toxic",
+    "emergency": true,
+    "summary": {
+      "fr": "Le lys est EXTRÊMEMENT toxique pour les chats. Même une petite quantité peut provoquer une insuffisance rénale mortelle.",
+      "en": "Lilies are EXTREMELY toxic to cats. Even a small amount can cause fatal kidney failure."
+    },
+    "symptoms": {
+      "fr": "Vomissements, léthargie, perte d'appétit, insuffisance rénale aiguë sous 24-72h.",
+      "en": "Vomiting, lethargy, loss of appetite, acute kidney failure within 24-72h."
+    },
+    "what_to_do": {
+      "fr": "URGENCE ABSOLUE — Appelez un vétérinaire IMMÉDIATEMENT même si le chat a juste mâché une feuille ou bu l'eau du vase. Chaque minute compte.",
+      "en": "ABSOLUTE EMERGENCY — Call a vet IMMEDIATELY even if the cat just chewed a leaf or drank vase water. Every minute counts."
+    }
+  },
+  {
+    "names": [
+      "tulipe",
+      "tulip",
+      "tulipán",
+      "tulpe",
+      "tulipano",
+      "tulipa",
+      "tulipa",
+      "tulp"
+    ],
+    "toxicity": "toxic",
+    "emergency": true,
+    "summary": {
+      "fr": "Les tulipes sont toxiques, surtout le bulbe. Peut provoquer des troubles digestifs graves et cardiaques.",
+      "en": "Tulips are toxic, especially the bulb. Can cause severe digestive and cardiac issues."
+    },
+    "symptoms": {
+      "fr": "Vomissements, diarrhée, hypersalivation, dépression, tremblements, arythmie cardiaque.",
+      "en": "Vomiting, diarrhea, hypersalivation, depression, tremors, cardiac arrhythmia."
+    },
+    "what_to_do": {
+      "fr": "Consultez un vétérinaire rapidement. Si ingestion du bulbe, urgence vétérinaire immédiate.",
+      "en": "Consult a vet promptly. If bulb was ingested, immediate veterinary emergency."
+    }
+  },
+  {
+    "names": [
+      "muguet",
+      "lily of the valley",
+      "lirio de los valles",
+      "maiglöckchen",
+      "mughetto",
+      "lírio do vale",
+      "maiatz-lili",
+      "convallaria"
+    ],
+    "toxicity": "toxic",
+    "emergency": true,
+    "summary": {
+      "fr": "Le muguet est extrêmement toxique — contient des glycosides cardiotoxiques pouvant être mortels.",
+      "en": "Lily of the valley is extremely toxic — contains cardiotoxic glycosides that can be fatal."
+    },
+    "symptoms": {
+      "fr": "Vomissements, diarrhée, arythmie cardiaque sévère, hypotension, convulsions, coma.",
+      "en": "Vomiting, diarrhea, severe cardiac arrhythmia, hypotension, seizures, coma."
+    },
+    "what_to_do": {
+      "fr": "URGENCE VÉTÉRINAIRE IMMÉDIATE. Potentiellement mortel même en petite quantité.",
+      "en": "IMMEDIATE VETERINARY EMERGENCY. Potentially fatal even in small amounts."
+    }
+  },
+  {
+    "names": [
+      "dieffenbachia",
+      "dumb cane",
+      "canne muette",
+      "diffenbachia",
+      "canne des muets"
+    ],
+    "toxicity": "toxic",
+    "emergency": false,
+    "summary": {
+      "fr": "La dieffenbachia contient des cristaux d'oxalate qui provoquent une douleur intense et un gonflement buccal.",
+      "en": "Dieffenbachia contains oxalate crystals causing intense pain and oral swelling."
+    },
+    "symptoms": {
+      "fr": "Douleur et gonflement de la bouche, hypersalivation excessive, difficulté à avaler, vomissements.",
+      "en": "Oral pain and swelling, excessive drooling, difficulty swallowing, vomiting."
+    },
+    "what_to_do": {
+      "fr": "Rincez la bouche avec de l'eau. Consultez un vétérinaire si symptômes persistants ou difficultés respiratoires.",
+      "en": "Rinse mouth with water. See a vet if symptoms persist or breathing difficulties occur."
+    }
+  },
+  {
+    "names": [
+      "pothos",
+      "scindapsus",
+      "epipremnum",
+      "lierre du diable",
+      "devil's ivy",
+      "poto",
+      "golden pothos",
+      "pothos doré"
+    ],
+    "toxicity": "toxic",
+    "emergency": false,
+    "summary": {
+      "fr": "Le pothos contient des oxalates insolubles irritants pour la bouche et le système digestif.",
+      "en": "Pothos contains insoluble oxalates irritating to the mouth and digestive system."
+    },
+    "symptoms": {
+      "fr": "Irritation buccale, hypersalivation, vomissements, difficulté à avaler.",
+      "en": "Oral irritation, drooling, vomiting, difficulty swallowing."
+    },
+    "what_to_do": {
+      "fr": "Rincez la bouche. Consultez un vétérinaire si vomissements persistants ou détresse respiratoire.",
+      "en": "Rinse mouth. Consult vet if vomiting persists or respiratory distress occurs."
+    }
+  },
+  {
+    "names": [
+      "ficus",
+      "figuier",
+      "ficus benjamina",
+      "weeping fig",
+      "ficus pleureur",
+      "rubber plant",
+      "ficus elastica",
+      "caoutchouc"
+    ],
+    "toxicity": "toxic",
+    "emergency": false,
+    "summary": {
+      "fr": "Le ficus provoque des irritations cutanées et digestives. La sève est particulièrement irritante.",
+      "en": "Ficus causes skin and digestive irritation. The sap is particularly irritating."
+    },
+    "symptoms": {
+      "fr": "Irritation buccale, vomissements, diarrhée, démangeaisons cutanées si contact avec la sève.",
+      "en": "Oral irritation, vomiting, diarrhea, skin itching if contact with sap."
+    },
+    "what_to_do": {
+      "fr": "Lavez la zone exposée. Consultez un vétérinaire si symptômes digestifs importants.",
+      "en": "Wash exposed area. Consult vet if significant digestive symptoms occur."
+    }
+  },
+  {
+    "names": [
+      "dracaena",
+      "dragonnier",
+      "dragon tree",
+      "dracena",
+      "dracaena marginata",
+      "dracaena fragrans",
+      "lucky bamboo",
+      "bâton de bonheur"
+    ],
+    "toxicity": "toxic",
+    "emergency": false,
+    "summary": {
+      "fr": "Le dracaena est toxique pour les chats, contenant des saponines qui perturbent le système digestif et nerveux.",
+      "en": "Dracaena is toxic to cats, containing saponins that disrupt the digestive and nervous system."
+    },
+    "symptoms": {
+      "fr": "Vomissements (parfois avec sang), dépression, anorexie, hypersalivation, dilatation des pupilles.",
+      "en": "Vomiting (sometimes bloody), depression, anorexia, drooling, dilated pupils."
+    },
+    "what_to_do": {
+      "fr": "Consultez un vétérinaire. Surveillance nécessaire pendant 24-48h.",
+      "en": "Consult a vet. Monitoring required for 24-48h."
+    }
+  },
+  {
+    "names": [
+      "philodendron",
+      "philodendron coeur",
+      "heartleaf philodendron",
+      "philodendron scandens",
+      "philodendron oxycardium"
+    ],
+    "toxicity": "toxic",
+    "emergency": false,
+    "summary": {
+      "fr": "Le philodendron contient des oxalates de calcium irritants. Toxique mais rarement mortel.",
+      "en": "Philodendron contains irritating calcium oxalates. Toxic but rarely fatal."
+    },
+    "symptoms": {
+      "fr": "Irritation et gonflement buccal, hypersalivation, vomissements, difficultés à avaler.",
+      "en": "Oral irritation and swelling, drooling, vomiting, swallowing difficulties."
+    },
+    "what_to_do": {
+      "fr": "Rincez la bouche. Consultez un vétérinaire si symptômes sévères ou persistants.",
+      "en": "Rinse mouth. Consult vet if severe or persistent symptoms."
+    }
+  },
+  {
+    "names": [
+      "monstera",
+      "monstera deliciosa",
+      "costela de adão",
+      "fensterblatt",
+      "swiss cheese plant",
+      "plante gruyère",
+      "ceriman"
+    ],
+    "toxicity": "toxic",
+    "emergency": false,
+    "summary": {
+      "fr": "Le monstera contient des oxalates de calcium qui irritent fortement la bouche et le système digestif.",
+      "en": "Monstera contains calcium oxalates that strongly irritate the mouth and digestive system."
+    },
+    "symptoms": {
+      "fr": "Brûlures buccales, hypersalivation intense, vomissements, œdème de la gorge possible.",
+      "en": "Oral burning, intense drooling, vomiting, possible throat swelling."
+    },
+    "what_to_do": {
+      "fr": "Rincez la bouche avec eau froide. Consultez un vétérinaire si difficultés respiratoires.",
+      "en": "Rinse mouth with cold water. Consult vet if breathing difficulties."
+    }
+  },
+  {
+    "names": [
+      "azalée",
+      "azalea",
+      "azalea",
+      "azalee",
+      "rododendro",
+      "azaléia",
+      "azalea",
+      "rhododendron"
+    ],
+    "toxicity": "toxic",
+    "emergency": true,
+    "summary": {
+      "fr": "L'azalée est très toxique — même quelques feuilles peuvent provoquer une intoxication grave.",
+      "en": "Azalea is very toxic — even a few leaves can cause serious poisoning."
+    },
+    "symptoms": {
+      "fr": "Vomissements, diarrhée, hypersalivation, faiblesse, tremblements, arythmie cardiaque, coma.",
+      "en": "Vomiting, diarrhea, drooling, weakness, tremors, cardiac arrhythmia, coma."
+    },
+    "what_to_do": {
+      "fr": "URGENCE VÉTÉRINAIRE. Très dangereux, consultez immédiatement.",
+      "en": "VETERINARY EMERGENCY. Very dangerous, consult immediately."
+    }
+  },
+  {
+    "names": [
+      "if",
+      "yew",
+      "tejo",
+      "eibe",
+      "tasso",
+      "teixo",
+      "hagina",
+      "taxus"
+    ],
+    "toxicity": "toxic",
+    "emergency": true,
+    "summary": {
+      "fr": "L'if est MORTELLEMENT toxique. Presque toutes les parties sont dangereuses, mortelles en quelques heures.",
+      "en": "Yew is FATALLY toxic. Almost all parts are dangerous, fatal within hours."
+    },
+    "symptoms": {
+      "fr": "Tremblements, difficultés respiratoires, arythmie cardiaque, collapsus, mort rapide.",
+      "en": "Tremors, breathing difficulties, cardiac arrhythmia, collapse, rapid death."
+    },
+    "what_to_do": {
+      "fr": "URGENCE VITALE IMMÉDIATE. Appelez le vétérinaire d'urgence maintenant.",
+      "en": "IMMEDIATE LIFE-THREATENING EMERGENCY. Call emergency vet now."
+    }
+  },
+  {
+    "names": [
+      "oleander",
+      "laurier rose",
+      "nerium",
+      "adelfa",
+      "oleander",
+      "oleandro",
+      "loendro",
+      "errosadar"
+    ],
+    "toxicity": "toxic",
+    "emergency": true,
+    "summary": {
+      "fr": "Le laurier-rose est extrêmement toxique — quelques feuilles peuvent être mortelles.",
+      "en": "Oleander is extremely toxic — a few leaves can be fatal."
+    },
+    "symptoms": {
+      "fr": "Vomissements, diarrhée sanglante, arythmie cardiaque sévère, hypothermie, coma, mort.",
+      "en": "Vomiting, bloody diarrhea, severe cardiac arrhythmia, hypothermia, coma, death."
+    },
+    "what_to_do": {
+      "fr": "URGENCE ABSOLUE. Appelez un vétérinaire immédiatement. Peut être mortel en quelques heures.",
+      "en": "ABSOLUTE EMERGENCY. Call a vet immediately. Can be fatal within hours."
+    }
+  },
+  {
+    "names": [
+      "digitale",
+      "foxglove",
+      "dedalera",
+      "fingerhut",
+      "digitale pourprée",
+      "digitalis",
+      "guante de zorra"
+    ],
+    "toxicity": "toxic",
+    "emergency": true,
+    "summary": {
+      "fr": "La digitale contient des glycosides cardiaques extrêmement dangereux pouvant être mortels.",
+      "en": "Foxglove contains extremely dangerous cardiac glycosides that can be fatal."
+    },
+    "symptoms": {
+      "fr": "Vomissements, arythmie cardiaque sévère, convulsions, collapsus, mort.",
+      "en": "Vomiting, severe cardiac arrhythmia, seizures, collapse, death."
+    },
+    "what_to_do": {
+      "fr": "URGENCE VÉTÉRINAIRE IMMÉDIATE.",
+      "en": "IMMEDIATE VETERINARY EMERGENCY."
+    }
+  },
+  {
+    "names": [
+      "cyclamen",
+      "cyclamen",
+      "ciclamen",
+      "alpenveilchen",
+      "ciclamino",
+      "ciclâmen",
+      "ziklamen",
+      "pain de pourceau"
+    ],
+    "toxicity": "toxic",
+    "emergency": true,
+    "summary": {
+      "fr": "Le cyclamen, surtout le bulbe, est très toxique et peut provoquer des troubles cardiaques graves.",
+      "en": "Cyclamen, especially the bulb, is very toxic and can cause serious cardiac problems."
+    },
+    "symptoms": {
+      "fr": "Vomissements sévères, diarrhée, convulsions, arythmie cardiaque, mort possible.",
+      "en": "Severe vomiting, diarrhea, seizures, cardiac arrhythmia, possible death."
+    },
+    "what_to_do": {
+      "fr": "URGENCE VÉTÉRINAIRE si ingestion du bulbe. Consultez rapidement pour toute ingestion.",
+      "en": "VETERINARY EMERGENCY if bulb ingested. Consult promptly for any ingestion."
+    }
+  },
+  {
+    "names": [
+      "narcisse",
+      "daffodil",
+      "narciso",
+      "narzisse",
+      "narciso",
+      "narciso",
+      "narziso",
+      "jonquille",
+      "jonquil",
+      "paperwhite"
+    ],
+    "toxicity": "toxic",
+    "emergency": true,
+    "summary": {
+      "fr": "Le narcisse est très toxique, surtout le bulbe. Contient de la lycorine, dangereuse pour le cœur.",
+      "en": "Daffodil is very toxic, especially the bulb. Contains lycorine, dangerous for the heart."
+    },
+    "symptoms": {
+      "fr": "Vomissements, diarrhée, hypersalivation, tremblements, arythmie cardiaque, convulsions.",
+      "en": "Vomiting, diarrhea, drooling, tremors, cardiac arrhythmia, seizures."
+    },
+    "what_to_do": {
+      "fr": "URGENCE VÉTÉRINAIRE. Très toxique, consultez immédiatement.",
+      "en": "VETERINARY EMERGENCY. Very toxic, consult immediately."
+    }
+  },
+  {
+    "names": [
+      "aconit",
+      "monkshood",
+      "aconitum",
+      "aconito",
+      "eisenhut",
+      "aconito",
+      "acónito",
+      "casque de jupiter"
+    ],
+    "toxicity": "toxic",
+    "emergency": true,
+    "summary": {
+      "fr": "L'aconit est l'une des plantes les plus toxiques — peut être mortel en très petite quantité.",
+      "en": "Monkshood is one of the most toxic plants — can be fatal in very small amounts."
+    },
+    "symptoms": {
+      "fr": "Paralysie, arythmie cardiaque, détresse respiratoire, mort rapide.",
+      "en": "Paralysis, cardiac arrhythmia, respiratory distress, rapid death."
+    },
+    "what_to_do": {
+      "fr": "URGENCE ABSOLUE ET VITALE. Vétérinaire d'urgence immédiatement.",
+      "en": "ABSOLUTE LIFE-THREATENING EMERGENCY. Emergency vet immediately."
+    }
+  },
+  {
+    "names": [
+      "belladone",
+      "deadly nightshade",
+      "atropa belladonna",
+      "tollkirsche",
+      "belladonna",
+      "beladona",
+      "argi-belar"
+    ],
+    "toxicity": "toxic",
+    "emergency": true,
+    "summary": {
+      "fr": "La belladone est extrêmement toxique — contient de l'atropine et de la scopolamine.",
+      "en": "Deadly nightshade is extremely toxic — contains atropine and scopolamine."
+    },
+    "symptoms": {
+      "fr": "Dilatation des pupilles, tachycardie, hallucinations, convulsions, coma, mort.",
+      "en": "Dilated pupils, tachycardia, hallucinations, seizures, coma, death."
+    },
+    "what_to_do": {
+      "fr": "URGENCE VITALE IMMÉDIATE.",
+      "en": "IMMEDIATE LIFE-THREATENING EMERGENCY."
+    }
+  },
+  {
+    "names": [
+      "gui",
+      "mistletoe",
+      "muérdago",
+      "mistel",
+      "vischio",
+      "visco",
+      "mihura",
+      "viscum album"
+    ],
+    "toxicity": "toxic",
+    "emergency": true,
+    "summary": {
+      "fr": "Le gui est très toxique, surtout les baies. Peut provoquer des troubles cardiaques et nerveux graves.",
+      "en": "Mistletoe is very toxic, especially berries. Can cause serious cardiac and nervous problems."
+    },
+    "symptoms": {
+      "fr": "Vomissements, diarrhée, difficultés respiratoires, bradycardie, convulsions.",
+      "en": "Vomiting, diarrhea, breathing difficulties, bradycardia, seizures."
+    },
+    "what_to_do": {
+      "fr": "URGENCE VÉTÉRINAIRE IMMÉDIATE.",
+      "en": "IMMEDIATE VETERINARY EMERGENCY."
+    }
+  },
+  {
+    "names": [
+      "houx",
+      "holly",
+      "acebo",
+      "stechpalme",
+      "agrifoglio",
+      "azevinho",
+      "gorosti",
+      "ilex"
+    ],
+    "toxicity": "toxic",
+    "emergency": false,
+    "summary": {
+      "fr": "Le houx est modérément toxique. Les baies sont les plus dangereuses.",
+      "en": "Holly is moderately toxic. Berries are the most dangerous part."
+    },
+    "symptoms": {
+      "fr": "Vomissements, diarrhée, léthargie, perte d'équilibre.",
+      "en": "Vomiting, diarrhea, lethargy, loss of balance."
+    },
+    "what_to_do": {
+      "fr": "Consultez un vétérinaire si ingestion de baies ou symptômes importants.",
+      "en": "Consult a vet if berries ingested or significant symptoms."
+    }
+  },
+  {
+    "names": [
+      "poinsettia",
+      "étoile de noël",
+      "christmas star",
+      "stella di natale",
+      "weihnachtsstern",
+      "flor de pascua",
+      "eguberri-izarra",
+      "euphorbia pulcherrima"
+    ],
+    "toxicity": "warning",
+    "emergency": false,
+    "summary": {
+      "fr": "Le poinsettia est modérément irritant mais rarement dangereux. Sa réputation toxique est exagérée.",
+      "en": "Poinsettia is moderately irritating but rarely dangerous. Its toxic reputation is exaggerated."
+    },
+    "symptoms": {
+      "fr": "Irritation buccale, hypersalivation, vomissements légers, irritation cutanée.",
+      "en": "Oral irritation, drooling, mild vomiting, skin irritation."
+    },
+    "what_to_do": {
+      "fr": "Rincez la bouche. Surveillez. Consultez un vétérinaire si symptômes persistent plus de 2h.",
+      "en": "Rinse mouth. Monitor. Consult vet if symptoms persist more than 2h."
+    }
+  },
+  {
+    "names": [
+      "spathiphyllum",
+      "peace lily",
+      "fleur de lune",
+      "einblatt",
+      "espatifilo",
+      "lírio da paz",
+      "bake-lore",
+      "spatifilum"
+    ],
+    "toxicity": "toxic",
+    "emergency": false,
+    "summary": {
+      "fr": "Le spathiphyllum contient des oxalates de calcium. Irritant pour la bouche et le système digestif.",
+      "en": "Peace lily contains calcium oxalates. Irritating to mouth and digestive system."
+    },
+    "symptoms": {
+      "fr": "Brûlures buccales intenses, hypersalivation, vomissements, difficulté à avaler.",
+      "en": "Intense oral burning, excessive drooling, vomiting, swallowing difficulty."
+    },
+    "what_to_do": {
+      "fr": "Rincez abondamment la bouche. Consultez un vétérinaire si symptômes sévères.",
+      "en": "Rinse mouth thoroughly. Consult vet if severe symptoms."
+    }
+  },
+  {
+    "names": [
+      "kalanchoe",
+      "kalanchoe blossfeldiana",
+      "flaming katy",
+      "panda plant",
+      "kalanchoé"
+    ],
+    "toxicity": "toxic",
+    "emergency": true,
+    "summary": {
+      "fr": "Le kalanchoé contient des glycosides cardiaques pouvant provoquer des arythmies graves.",
+      "en": "Kalanchoe contains cardiac glycosides that can cause serious arrhythmias."
+    },
+    "symptoms": {
+      "fr": "Vomissements, diarrhée, arythmie cardiaque, faiblesse, collapsus.",
+      "en": "Vomiting, diarrhea, cardiac arrhythmia, weakness, collapse."
+    },
+    "what_to_do": {
+      "fr": "URGENCE VÉTÉRINAIRE. Consultez immédiatement.",
+      "en": "VETERINARY EMERGENCY. Consult immediately."
+    }
+  },
+  {
+    "names": [
+      "sansevière",
+      "sansevieria",
+      "snake plant",
+      "belle-mère",
+      "mother in law tongue",
+      "langue de belle mère",
+      "saint george sword",
+      "dracaena trifasciata"
+    ],
+    "toxicity": "warning",
+    "emergency": false,
+    "summary": {
+      "fr": "La sansevière contient des saponines, modérément toxique. Rarement grave.",
+      "en": "Snake plant contains saponins, moderately toxic. Rarely serious."
+    },
+    "symptoms": {
+      "fr": "Nausées, vomissements, diarrhée, hypersalivation.",
+      "en": "Nausea, vomiting, diarrhea, drooling."
+    },
+    "what_to_do": {
+      "fr": "Surveillez votre chat. Consultez un vétérinaire si symptômes persistent plus de 4h.",
+      "en": "Monitor your cat. Consult vet if symptoms persist more than 4h."
+    }
+  },
+  {
+    "names": [
+      "wisteria",
+      "glycine",
+      "glicinia",
+      "blauregen",
+      "glicine",
+      "glicínia",
+      "glizina"
+    ],
+    "toxicity": "toxic",
+    "emergency": false,
+    "summary": {
+      "fr": "La glycine est toxique, surtout les graines et gousses. Contient de la lectine et de la wistérine.",
+      "en": "Wisteria is toxic, especially seeds and pods. Contains lectin and wisterin."
+    },
+    "symptoms": {
+      "fr": "Vomissements, diarrhée, dépression, hypersalivation.",
+      "en": "Vomiting, diarrhea, depression, drooling."
+    },
+    "what_to_do": {
+      "fr": "Consultez un vétérinaire. Urgence si ingestion de graines en grande quantité.",
+      "en": "Consult a vet. Emergency if large amount of seeds ingested."
+    }
+  },
+  {
+    "names": [
+      "aloe vera",
+      "aloe",
+      "aloès",
+      "aloe barbadensis",
+      "aloe vera gel"
+    ],
+    "toxicity": "warning",
+    "emergency": false,
+    "summary": {
+      "fr": "L'aloe vera est modérément toxique pour les chats. La sève jaune (latex) est la partie la plus dangereuse.",
+      "en": "Aloe vera is moderately toxic to cats. The yellow sap (latex) is the most dangerous part."
+    },
+    "symptoms": {
+      "fr": "Vomissements, diarrhée (parfois rougeâtre), léthargie, tremblements.",
+      "en": "Vomiting, diarrhea (sometimes reddish), lethargy, tremors."
+    },
+    "what_to_do": {
+      "fr": "Consultez un vétérinaire. Généralement pas mortel mais nécessite surveillance.",
+      "en": "Consult a vet. Generally not fatal but requires monitoring."
+    }
+  },
+  {
+    "names": [
+      "zamioculcas",
+      "zz plant",
+      "plante zz",
+      "zamio",
+      "emerald palm"
+    ],
+    "toxicity": "toxic",
+    "emergency": false,
+    "summary": {
+      "fr": "Le zamioculcas contient des oxalates de calcium irritants pour la bouche et le système digestif.",
+      "en": "ZZ plant contains calcium oxalates irritating to mouth and digestive system."
+    },
+    "symptoms": {
+      "fr": "Irritation buccale, vomissements, hypersalivation.",
+      "en": "Oral irritation, vomiting, drooling."
+    },
+    "what_to_do": {
+      "fr": "Rincez la bouche. Consultez un vétérinaire si symptômes persistent.",
+      "en": "Rinse mouth. Consult vet if symptoms persist."
+    }
+  },
+  {
+    "names": [
+      "cactus",
+      "succulent",
+      "cactée",
+      "opuntia",
+      "cactus épineux"
+    ],
+    "toxicity": "safe",
+    "emergency": false,
+    "summary": {
+      "fr": "La plupart des cactus ne sont pas toxiques mais les épines peuvent blesser le chat.",
+      "en": "Most cacti are not toxic but spines can injure the cat."
+    },
+    "symptoms": {
+      "fr": "Blessures par piqûres d'épines, irritation locale.",
+      "en": "Injuries from spine punctures, local irritation."
+    },
+    "what_to_do": {
+      "fr": "Retirez les épines délicatement. Désinfectez la plaie. Consultez si infection.",
+      "en": "Gently remove spines. Disinfect wound. Consult if infection occurs."
+    }
+  },
+  {
+    "names": [
+      "rosier",
+      "rose",
+      "rosa",
+      "rose bush",
+      "rosal",
+      "rosier grimpant",
+      "wild rose"
+    ],
+    "toxicity": "warning",
+    "emergency": false,
+    "summary": {
+      "fr": "Les roses ne sont pas toxiques mais les épines peuvent blesser. Les pétales peuvent causer de légères nausées.",
+      "en": "Roses are not toxic but thorns can injure. Petals may cause mild nausea."
+    },
+    "symptoms": {
+      "fr": "Légères nausées, vomissements si grande quantité ingérée. Blessures par épines.",
+      "en": "Mild nausea, vomiting if large amount ingested. Thorn injuries."
+    },
+    "what_to_do": {
+      "fr": "Surveillez. Consultez un vétérinaire si symptômes digestifs persistants.",
+      "en": "Monitor. Consult vet if digestive symptoms persist."
+    }
+  },
+  {
+    "names": [
+      "lavande",
+      "lavender",
+      "lavanda",
+      "lavendel",
+      "lavanda",
+      "lavanda",
+      "izpilikua",
+      "lavandula"
+    ],
+    "toxicity": "warning",
+    "emergency": false,
+    "summary": {
+      "fr": "La lavande contient des huiles essentielles légèrement toxiques pour les chats en grande quantité.",
+      "en": "Lavender contains essential oils slightly toxic to cats in large amounts."
+    },
+    "symptoms": {
+      "fr": "Nausées légères, vomissements si ingestion importante. Généralement sans conséquence grave.",
+      "en": "Mild nausea, vomiting if large ingestion. Generally no serious consequences."
+    },
+    "what_to_do": {
+      "fr": "Surveillance suffit dans la plupart des cas. Consultez si symptômes importants.",
+      "en": "Monitoring sufficient in most cases. Consult if significant symptoms."
+    }
+  },
+  {
+    "names": [
+      "chrysanthème",
+      "chrysanthemum",
+      "crisantemo",
+      "chrysantheme",
+      "crisantemo",
+      "crisântemo",
+      "krisantemo",
+      "mum",
+      "garden mum"
+    ],
+    "toxicity": "warning",
+    "emergency": false,
+    "summary": {
+      "fr": "Le chrysanthème est modérément toxique, contenant des pyréthines irritantes.",
+      "en": "Chrysanthemum is moderately toxic, containing irritating pyrethrins."
+    },
+    "symptoms": {
+      "fr": "Hypersalivation, vomissements, diarrhée, incoordination, irritation cutanée.",
+      "en": "Drooling, vomiting, diarrhea, incoordination, skin irritation."
+    },
+    "what_to_do": {
+      "fr": "Consultez un vétérinaire si symptômes neurologique ou persistants.",
+      "en": "Consult vet if neurological or persistent symptoms."
+    }
+  },
+  {
+    "names": [
+      "hortensia",
+      "hydrangea",
+      "hortensie",
+      "ortensia",
+      "hortênsia",
+      "hortentsia"
+    ],
+    "toxicity": "warning",
+    "emergency": false,
+    "summary": {
+      "fr": "L'hortensia contient de faibles quantités de cyanure. Modérément toxique.",
+      "en": "Hydrangea contains small amounts of cyanide. Moderately toxic."
+    },
+    "symptoms": {
+      "fr": "Vomissements, diarrhée, léthargie, dépression.",
+      "en": "Vomiting, diarrhea, lethargy, depression."
+    },
+    "what_to_do": {
+      "fr": "Consultez un vétérinaire. Rarement grave mais surveillance recommandée.",
+      "en": "Consult vet. Rarely serious but monitoring recommended."
+    }
+  },
+  {
+    "names": [
+      "clivia",
+      "clivia miniata",
+      "natal lily",
+      "bush lily",
+      "kafir lily"
+    ],
+    "toxicity": "warning",
+    "emergency": false,
+    "summary": {
+      "fr": "Le clivia contient de la lycorine, modérément toxique pour les chats.",
+      "en": "Clivia contains lycorine, moderately toxic to cats."
+    },
+    "symptoms": {
+      "fr": "Vomissements, diarrhée, hypersalivation, tremblements.",
+      "en": "Vomiting, diarrhea, drooling, tremors."
+    },
+    "what_to_do": {
+      "fr": "Consultez un vétérinaire. Surveillez 24h.",
+      "en": "Consult a vet. Monitor for 24h."
+    }
+  },
+  {
+    "names": [
+      "begonia",
+      "bégonia",
+      "begonie",
+      "begónia"
+    ],
+    "toxicity": "warning",
+    "emergency": false,
+    "summary": {
+      "fr": "Le bégonia est modérément toxique. Les racines sont les plus dangereuses.",
+      "en": "Begonia is moderately toxic. Roots are the most dangerous part."
+    },
+    "symptoms": {
+      "fr": "Irritation buccale, vomissements, hypersalivation.",
+      "en": "Oral irritation, vomiting, drooling."
+    },
+    "what_to_do": {
+      "fr": "Consultez un vétérinaire si ingestion des racines ou symptômes persistants.",
+      "en": "Consult vet if roots ingested or persistent symptoms."
+    }
+  },
+  {
+    "names": [
+      "géranium",
+      "geranium",
+      "pelargonium",
+      "geranio",
+      "storchschnabel",
+      "geranio",
+      "gerânio"
+    ],
+    "toxicity": "warning",
+    "emergency": false,
+    "summary": {
+      "fr": "Le géranium est légèrement toxique pour les chats. Peut causer des troubles digestifs.",
+      "en": "Geranium is mildly toxic to cats. Can cause digestive issues."
+    },
+    "symptoms": {
+      "fr": "Vomissements, dépression, anorexie, légère dépression.",
+      "en": "Vomiting, depression, anorexia, mild depression."
+    },
+    "what_to_do": {
+      "fr": "Surveillez. Consultez un vétérinaire si symptômes persistent plus de 24h.",
+      "en": "Monitor. Consult vet if symptoms persist more than 24h."
+    }
+  },
+  {
+    "names": [
+      "eucalyptus",
+      "gommier",
+      "eucaliptos",
+      "eukalyptus",
+      "eucalipto",
+      "eucalipto"
+    ],
+    "toxicity": "warning",
+    "emergency": false,
+    "summary": {
+      "fr": "L'eucalyptus et ses huiles essentielles sont modérément toxiques pour les chats.",
+      "en": "Eucalyptus and its essential oils are moderately toxic to cats."
+    },
+    "symptoms": {
+      "fr": "Hypersalivation, vomissements, diarrhée, faiblesse, dépression.",
+      "en": "Drooling, vomiting, diarrhea, weakness, depression."
+    },
+    "what_to_do": {
+      "fr": "Consultez un vétérinaire. Évitez les diffuseurs d'huile essentielle d'eucalyptus.",
+      "en": "Consult a vet. Avoid eucalyptus essential oil diffusers."
+    }
+  },
+  {
+    "names": [
+      "herbe à chat",
+      "catnip",
+      "cataire",
+      "nepeta cataria",
+      "menthe des chats",
+      "hierba gatera",
+      "katzenminze",
+      "erba gatta"
+    ],
+    "toxicity": "safe",
+    "emergency": false,
+    "summary": {
+      "fr": "L'herbe à chat est totalement sûre et bénéfique pour les chats. Elle provoque une réaction euphorique temporaire.",
+      "en": "Catnip is completely safe and beneficial for cats. It causes a temporary euphoric reaction."
+    },
+    "symptoms": {
+      "fr": "Aucun symptôme néfaste. Comportement joueur, roulement, frottements — effets passagers.",
+      "en": "No harmful symptoms. Playful behavior, rolling, rubbing — temporary effects."
+    },
+    "what_to_do": {
+      "fr": "Aucune action nécessaire. C'est une plante inoffensive et appréciée des chats.",
+      "en": "No action needed. It's a harmless plant loved by cats."
+    }
+  },
+  {
+    "names": [
+      "valériane",
+      "valerian",
+      "valeriana",
+      "baldrian",
+      "valeriana",
+      "valeriana",
+      "baldariana"
+    ],
+    "toxicity": "safe",
+    "emergency": false,
+    "summary": {
+      "fr": "La valériane est sûre pour les chats et a un effet similaire à l'herbe à chat.",
+      "en": "Valerian is safe for cats and has an effect similar to catnip."
+    },
+    "symptoms": {
+      "fr": "Aucun symptôme néfaste. Peut exciter ou calmer le chat.",
+      "en": "No harmful symptoms. May excite or calm the cat."
+    },
+    "what_to_do": {
+      "fr": "Aucune action nécessaire.",
+      "en": "No action needed."
+    }
+  },
+  {
+    "names": [
+      "thym",
+      "thyme",
+      "tomillo",
+      "thymian",
+      "timo",
+      "tomilho",
+      "ezkaia",
+      "thymus"
+    ],
+    "toxicity": "safe",
+    "emergency": false,
+    "summary": {
+      "fr": "Le thym est sûr pour les chats en petites quantités. Pas de toxicité connue.",
+      "en": "Thyme is safe for cats in small amounts. No known toxicity."
+    },
+    "symptoms": {
+      "fr": "Aucun symptôme néfaste connu.",
+      "en": "No known harmful symptoms."
+    },
+    "what_to_do": {
+      "fr": "Aucune action nécessaire.",
+      "en": "No action needed."
+    }
+  },
+  {
+    "names": [
+      "basilic",
+      "basil",
+      "albahaca",
+      "basilikum",
+      "basilico",
+      "manjericão",
+      "erramu",
+      "ocimum basilicum"
+    ],
+    "toxicity": "safe",
+    "emergency": false,
+    "summary": {
+      "fr": "Le basilic est sûr pour les chats. Aucune toxicité connue.",
+      "en": "Basil is safe for cats. No known toxicity."
+    },
+    "symptoms": {
+      "fr": "Aucun symptôme néfaste connu.",
+      "en": "No known harmful symptoms."
+    },
+    "what_to_do": {
+      "fr": "Aucune action nécessaire.",
+      "en": "No action needed."
+    }
+  },
+  {
+    "names": [
+      "bambou",
+      "bamboo",
+      "bambu",
+      "bambus",
+      "bambù",
+      "bambu",
+      "banbua",
+      "lucky bamboo vrai",
+      "phyllostachys"
+    ],
+    "toxicity": "safe",
+    "emergency": false,
+    "summary": {
+      "fr": "Le vrai bambou (Phyllostachys) est sans danger pour les chats. À distinguer du lucky bamboo (Dracaena).",
+      "en": "True bamboo (Phyllostachys) is safe for cats. Distinguish from lucky bamboo (Dracaena)."
+    },
+    "symptoms": {
+      "fr": "Aucun symptôme néfaste connu.",
+      "en": "No known harmful symptoms."
+    },
+    "what_to_do": {
+      "fr": "Aucune action nécessaire. Attention: le lucky bamboo (Dracaena) est LUI toxique.",
+      "en": "No action needed. Note: lucky bamboo (Dracaena) IS toxic."
+    }
+  },
+  {
+    "names": [
+      "fougère de boston",
+      "boston fern",
+      "nephrolepis",
+      "fougère",
+      "helecho",
+      "farn",
+      "felce",
+      "samambaia"
+    ],
+    "toxicity": "safe",
+    "emergency": false,
+    "summary": {
+      "fr": "La fougère de Boston est sans danger pour les chats. L'une des meilleures plantes avec chats.",
+      "en": "Boston fern is safe for cats. One of the best plants to have with cats."
+    },
+    "symptoms": {
+      "fr": "Aucun symptôme néfaste connu.",
+      "en": "No known harmful symptoms."
+    },
+    "what_to_do": {
+      "fr": "Aucune action nécessaire. Plante recommandée pour les foyers avec chats.",
+      "en": "No action needed. Recommended plant for cat households."
+    }
+  },
+  {
+    "names": [
+      "herbe à gazon",
+      "cat grass",
+      "blé germé",
+      "avoine",
+      "orge",
+      "wheat grass",
+      "herbe du chat",
+      "dactylis"
+    ],
+    "toxicity": "safe",
+    "emergency": false,
+    "summary": {
+      "fr": "L'herbe à chat (blé/avoine germés) est totalement sûre et même recommandée pour les chats.",
+      "en": "Cat grass (sprouted wheat/oats) is completely safe and even recommended for cats."
+    },
+    "symptoms": {
+      "fr": "Aucun symptôme néfaste. Aide à la digestion et à l'élimination des boules de poils.",
+      "en": "No harmful symptoms. Helps digestion and hairball elimination."
+    },
+    "what_to_do": {
+      "fr": "Aucune action nécessaire. Plante bénéfique.",
+      "en": "No action needed. Beneficial plant."
+    }
+  },
+  {
+    "names": [
+      "orchidée",
+      "orchid",
+      "orquídea",
+      "orchidee",
+      "orchidea",
+      "orquídea",
+      "orkidea",
+      "phalaenopsis",
+      "cattleya",
+      "dendrobium"
+    ],
+    "toxicity": "safe",
+    "emergency": false,
+    "summary": {
+      "fr": "Les orchidées sont sans danger pour les chats. Plante décorative sûre.",
+      "en": "Orchids are safe for cats. A safe decorative plant."
+    },
+    "symptoms": {
+      "fr": "Aucun symptôme néfaste connu.",
+      "en": "No known harmful symptoms."
+    },
+    "what_to_do": {
+      "fr": "Aucune action nécessaire.",
+      "en": "No action needed."
+    }
+  },
+  {
+    "names": [
+      "broméliacée",
+      "bromeliad",
+      "bromelia",
+      "bromelie",
+      "bromeliácea",
+      "bromeliaceae",
+      "guzmania",
+      "vriesea",
+      "tillandsia",
+      "aechmea"
+    ],
+    "toxicity": "safe",
+    "emergency": false,
+    "summary": {
+      "fr": "Les broméliacées sont sans danger pour les chats. Plantes tropicales sûres.",
+      "en": "Bromeliads are safe for cats. Safe tropical plants."
+    },
+    "symptoms": {
+      "fr": "Aucun symptôme néfaste connu.",
+      "en": "No known harmful symptoms."
+    },
+    "what_to_do": {
+      "fr": "Aucune action nécessaire.",
+      "en": "No action needed."
+    }
+  },
+  {
+    "names": [
+      "areca",
+      "palmier areca",
+      "dypsis lutescens",
+      "palmier bambou",
+      "butterfly palm",
+      "areca palm",
+      "palmier"
+    ],
+    "toxicity": "safe",
+    "emergency": false,
+    "summary": {
+      "fr": "Le palmier areca est sans danger pour les chats. Excellent purificateur d'air.",
+      "en": "Areca palm is safe for cats. Excellent air purifier."
+    },
+    "symptoms": {
+      "fr": "Aucun symptôme néfaste connu.",
+      "en": "No known harmful symptoms."
+    },
+    "what_to_do": {
+      "fr": "Aucune action nécessaire. Plante recommandée pour foyers avec animaux.",
+      "en": "No action needed. Recommended plant for pet households."
+    }
+  },
+  {
+    "names": [
+      "véronique",
+      "veronica",
+      "speedwell",
+      "hebe",
+      "véronique arbustive"
+    ],
+    "toxicity": "safe",
+    "emergency": false,
+    "summary": {
+      "fr": "La véronique est sans danger connu pour les chats.",
+      "en": "Veronica is not known to be dangerous for cats."
+    },
+    "symptoms": {
+      "fr": "Aucun symptôme néfaste connu.",
+      "en": "No known harmful symptoms."
+    },
+    "what_to_do": {
+      "fr": "Aucune action nécessaire.",
+      "en": "No action needed."
+    }
+  },
+  {
+    "names": [
+      "dionée",
+      "venus flytrap",
+      "dionaea muscipula",
+      "attrape-mouche",
+      "plante carnivore"
+    ],
+    "toxicity": "safe",
+    "emergency": false,
+    "summary": {
+      "fr": "La dionée attrape-mouche est sans danger pour les chats. Plante carnivore inoffensive.",
+      "en": "Venus flytrap is safe for cats. Harmless carnivorous plant."
+    },
+    "symptoms": {
+      "fr": "Aucun symptôme néfaste connu. Le piège peut se refermer sur la patte sans danger.",
+      "en": "No known harmful symptoms. The trap may close on a paw harmlessly."
+    },
+    "what_to_do": {
+      "fr": "Aucune action nécessaire.",
+      "en": "No action needed."
+    }
+  },
+  {
+    "names": [
+      "marguerite",
+      "daisy",
+      "margarita",
+      "margerite",
+      "margherita",
+      "margarida",
+      "margarita",
+      "bellis",
+      "leucanthemum"
+    ],
+    "toxicity": "warning",
+    "emergency": false,
+    "summary": {
+      "fr": "Les marguerites sont légèrement irritantes. Modérément toxiques en grande quantité.",
+      "en": "Daisies are mildly irritating. Moderately toxic in large quantities."
+    },
+    "symptoms": {
+      "fr": "Hypersalivation, vomissements, diarrhée légère si grande quantité ingérée.",
+      "en": "Drooling, vomiting, mild diarrhea if large quantity ingested."
+    },
+    "what_to_do": {
+      "fr": "Surveillez. Consultez un vétérinaire si symptômes persistants.",
+      "en": "Monitor. Consult vet if symptoms persist."
+    }
+  },
+  {
+    "names": [
+      "coriandre",
+      "cilantro",
+      "coriander",
+      "koriander",
+      "coriandolo",
+      "coentro",
+      "koriandrea"
+    ],
+    "toxicity": "safe",
+    "emergency": false,
+    "summary": {
+      "fr": "La coriandre est sans danger pour les chats en petites quantités.",
+      "en": "Coriander is safe for cats in small amounts."
+    },
+    "symptoms": {
+      "fr": "Aucun symptôme néfaste connu.",
+      "en": "No known harmful symptoms."
+    },
+    "what_to_do": {
+      "fr": "Aucune action nécessaire.",
+      "en": "No action needed."
+    }
+  },
+  {
+    "names": [
+      "romarin",
+      "rosemary",
+      "romero",
+      "rosmarin",
+      "rosmarino",
+      "alecrim",
+      "erromeroa",
+      "rosmarinus"
+    ],
+    "toxicity": "warning",
+    "emergency": false,
+    "summary": {
+      "fr": "Le romarin est légèrement toxique pour les chats en grande quantité. Huiles essentielles à éviter.",
+      "en": "Rosemary is mildly toxic to cats in large amounts. Essential oils should be avoided."
+    },
+    "symptoms": {
+      "fr": "Vomissements, diarrhée légère si grande ingestion.",
+      "en": "Vomiting, mild diarrhea if large ingestion."
+    },
+    "what_to_do": {
+      "fr": "Surveillez. Évitez les huiles essentielles de romarin autour des chats.",
+      "en": "Monitor. Avoid rosemary essential oils around cats."
+    }
+  },
+  {
+    "names": [
+      "menthe poivrée",
+      "peppermint",
+      "menta",
+      "pfefferminze",
+      "menta piperita",
+      "hortelã-pimenta",
+      "piperbeltza"
+    ],
+    "toxicity": "warning",
+    "emergency": false,
+    "summary": {
+      "fr": "La menthe poivrée et ses huiles essentielles sont toxiques pour les chats. À éviter absolument.",
+      "en": "Peppermint and its essential oils are toxic to cats. Must be absolutely avoided."
+    },
+    "symptoms": {
+      "fr": "Vomissements, diarrhée, faiblesse musculaire, tremblements si huile essentielle.",
+      "en": "Vomiting, diarrhea, muscle weakness, tremors if essential oil."
+    },
+    "what_to_do": {
+      "fr": "Consultez un vétérinaire. Évitez tout diffuseur de menthe poivrée.",
+      "en": "Consult vet. Avoid all peppermint diffusers."
+    }
+  }
+];
+
+function normalizeStr(s) {
+  return s.toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // strip accents
+    .replace(/[^a-z0-9 ]/g, ' ')
+    .trim();
+}
+
+function searchDB(query) {
+  if (!query) return null;
+  const q = normalizeStr(query);
+  const words = q.split(/\s+/).filter(w => w.length > 2);
+  
+  let bestMatch = null;
+  let bestScore = 0;
+
+  for (const plant of PLANT_DB) {
+    let score = 0;
+    for (const name of plant.names) {
+      const n = normalizeStr(name);
+      // Exact match → highest score
+      if (n === q) { score = 100; break; }
+      // Contains full query
+      if (n.includes(q) || q.includes(n)) { score = Math.max(score, 80); }
+      // Word matches
+      for (const w of words) {
+        if (n.includes(w)) score = Math.max(score, 50 + w.length * 2);
+      }
+    }
+    if (score > bestScore) { bestScore = score; bestMatch = plant; }
+  }
+  // Only return if confidence is high enough
+  return bestScore >= 50 ? bestMatch : null;
+}
+
+function dbResultToResult(plant, lang) {
+  const l = (lang === 'fr' || lang === 'eu' || lang === 'es' || lang === 'de' || lang === 'it' || lang === 'pt') ? lang : 'en';
+  const summaryLang  = plant.summary[l]   || plant.summary['fr'] || plant.summary['en'];
+  const symptomsLang = plant.symptoms[l]  || plant.symptoms['fr'] || plant.symptoms['en'];
+  const whatLang     = plant.what_to_do[l]|| plant.what_to_do['fr'] || plant.what_to_do['en'];
+  // Capitalize plant name nicely
+  const displayName = plant.names[0].replace(/\b\w/g, c => c.toUpperCase());
+  return {
+    plant_name: displayName,
+    toxicity:   plant.toxicity,
+    summary:    summaryLang,
+    symptoms:   symptomsLang,
+    what_to_do: whatLang,
+    emergency:  plant.emergency,
+    fromDB:     true
+  };
+}
+
+
+/* ═══════════════════════════════════════════════
+   OFFLINE PLANT DATABASE — 246 plantes / 1531 alias
+   Fallback API seulement si non trouvee
+═══════════════════════════════════════════════ */
+const PLANT_DB = [{"names":["lys","lily","lirio","lilie","giglio","lilium","easter lily","tiger lily","day lily","hemerocallis","stargazer lily","lys tigre"],"toxicity":"toxic","emergency":true,"summary":{"fr":"Le lys est EXTREMEMENT toxique. Meme une petite quantite cause une insuffisance renale mortelle.","en":"Lily is EXTREMELY toxic. Even a tiny amount causes fatal kidney failure."},"symptoms":{"fr":"Vomissements, lethargie, insuffisance renale aigue sous 24-72h.","en":"Vomiting, lethargy, acute kidney failure within 24-72h."},"what_to_do":{"fr":"URGENCE ABSOLUE. Veterinaire IMMEDIATEMENT meme si le chat a juste mache une feuille.","en":"ABSOLUTE EMERGENCY. Call a vet IMMEDIATELY even if the cat just chewed a leaf."}},{"names":["muguet","lily of the valley","convallaria","maiglockchen","mughetto","may bells"],"toxicity":"toxic","emergency":true,"summary":{"fr":"Le muguet est extremement toxique. Glycosides cardiotoxiques pouvant etre mortels.","en":"Lily of the valley extremely toxic. Cardiotoxic glycosides can be fatal."},"symptoms":{"fr":"Vomissements, diarrhee, arythmie cardiaque severe, convulsions, coma.","en":"Vomiting, diarrhea, severe cardiac arrhythmia, seizures, coma."},"what_to_do":{"fr":"URGENCE VETERINAIRE IMMEDIATE.","en":"IMMEDIATE VETERINARY EMERGENCY."}},{"names":["if","yew","tejo","eibe","tasso","taxus","taxus baccata","japanese yew","english yew"],"toxicity":"toxic","emergency":true,"summary":{"fr":"L'if est MORTELLEMENT toxique. Mort en quelques heures.","en":"Yew is FATALLY toxic. Death within hours."},"symptoms":{"fr":"Tremblements, arythmie cardiaque, collapsus, mort rapide.","en":"Tremors, cardiac arrhythmia, collapse, rapid death."},"what_to_do":{"fr":"URGENCE VITALE IMMEDIATE.","en":"IMMEDIATE LIFE-THREATENING EMERGENCY."}},{"names":["oleander","laurier rose","nerium","adelfa","oleandro","nerium oleander","rose bay"],"toxicity":"toxic","emergency":true,"summary":{"fr":"Le laurier-rose est extremement toxique. Quelques feuilles peuvent etre mortelles.","en":"Oleander is extremely toxic. A few leaves can be fatal."},"symptoms":{"fr":"Vomissements, diarrhee sanglante, arythmie cardiaque severe, coma, mort.","en":"Vomiting, bloody diarrhea, severe cardiac arrhythmia, coma, death."},"what_to_do":{"fr":"URGENCE ABSOLUE. Veterinaire immediatement.","en":"ABSOLUTE EMERGENCY. Call a vet immediately."}},{"names":["tulipe","tulip","tulipan","tulpe","tulipano","tulipa","garden tulip"],"toxicity":"toxic","emergency":true,"summary":{"fr":"Les tulipes sont toxiques, surtout le bulbe. Troubles cardiaques possibles.","en":"Tulips are toxic, especially the bulb. Cardiac problems possible."},"symptoms":{"fr":"Vomissements, diarrhee, hypersalivation, tremblements, arythmie cardiaque.","en":"Vomiting, diarrhea, hypersalivation, tremors, cardiac arrhythmia."},"what_to_do":{"fr":"Urgence veterinaire si ingestion du bulbe. Consultez rapidement sinon.","en":"Vet emergency if bulb ingested. Consult promptly otherwise."}},{"names":["azalee","azalea","rododendro","rhododendron","azalea japonica","azalea indica"],"toxicity":"toxic","emergency":true,"summary":{"fr":"L'azalee est tres toxique. Meme quelques feuilles causent une intoxication grave.","en":"Azalea is very toxic. Even a few leaves cause serious poisoning."},"symptoms":{"fr":"Vomissements, diarrhee, hypersalivation, faiblesse, arythmie cardiaque, coma.","en":"Vomiting, diarrhea, drooling, weakness, cardiac arrhythmia, coma."},"what_to_do":{"fr":"URGENCE VETERINAIRE.","en":"VETERINARY EMERGENCY."}},{"names":["cyclamen","ciclamen","alpenveilchen","ciclamino","cyclamen persicum","pain de pourceau"],"toxicity":"toxic","emergency":true,"summary":{"fr":"Le cyclamen, surtout le bulbe, est tres toxique. Troubles cardiaques graves.","en":"Cyclamen, especially the bulb, is very toxic. Serious cardiac problems."},"symptoms":{"fr":"Vomissements severes, diarrhee, convulsions, arythmie cardiaque, mort possible.","en":"Severe vomiting, diarrhea, seizures, cardiac arrhythmia, possible death."},"what_to_do":{"fr":"URGENCE VETERINAIRE si ingestion du bulbe.","en":"VETERINARY EMERGENCY if bulb ingested."}},{"names":["narcisse","daffodil","narciso","narzisse","jonquille","jonquil","paperwhite","narcissus"],"toxicity":"toxic","emergency":true,"summary":{"fr":"Le narcisse est tres toxique, surtout le bulbe. Contient de la lycorine.","en":"Daffodil is very toxic, especially the bulb. Contains lycorine."},"symptoms":{"fr":"Vomissements, diarrhee, hypersalivation, arythmie cardiaque, convulsions.","en":"Vomiting, diarrhea, drooling, cardiac arrhythmia, seizures."},"what_to_do":{"fr":"URGENCE VETERINAIRE.","en":"VETERINARY EMERGENCY."}},{"names":["aconit","monkshood","aconitum","eisenhut","aconite","wolfsbane","aconitum napellus","casque de jupiter"],"toxicity":"toxic","emergency":true,"summary":{"fr":"L'aconit est l'une des plantes les plus toxiques. Peut etre mortel en tres petite quantite.","en":"Monkshood is one of the most toxic plants. Can be fatal in very small amounts."},"symptoms":{"fr":"Paralysie, arythmie cardiaque, detresse respiratoire, mort rapide.","en":"Paralysis, cardiac arrhythmia, respiratory distress, rapid death."},"what_to_do":{"fr":"URGENCE ABSOLUE ET VITALE.","en":"ABSOLUTE LIFE-THREATENING EMERGENCY."}},{"names":["belladone","deadly nightshade","atropa belladonna","tollkirsche","belladonna","cerise du diable"],"toxicity":"toxic","emergency":true,"summary":{"fr":"La belladone est extremement toxique. Contient atropine et scopolamine.","en":"Deadly nightshade is extremely toxic. Contains atropine and scopolamine."},"symptoms":{"fr":"Dilatation des pupilles, tachycardie, hallucinations, convulsions, coma, mort.","en":"Dilated pupils, tachycardia, hallucinations, seizures, coma, death."},"what_to_do":{"fr":"URGENCE VITALE IMMEDIATE.","en":"IMMEDIATE LIFE-THREATENING EMERGENCY."}},{"names":["gui","mistletoe","muerdago","mistel","vischio","viscum album","american mistletoe"],"toxicity":"toxic","emergency":true,"summary":{"fr":"Le gui est tres toxique, surtout les baies. Troubles cardiaques et nerveux graves.","en":"Mistletoe is very toxic, especially berries. Serious cardiac and nervous problems."},"symptoms":{"fr":"Vomissements, diarrhee, difficultes respiratoires, bradycardie, convulsions.","en":"Vomiting, diarrhea, breathing difficulties, bradycardia, seizures."},"what_to_do":{"fr":"URGENCE VETERINAIRE IMMEDIATE.","en":"IMMEDIATE VETERINARY EMERGENCY."}},{"names":["digitale","foxglove","dedalera","fingerhut","digitalis","digitalis purpurea","fairy thimbles"],"toxicity":"toxic","emergency":true,"summary":{"fr":"La digitale contient des glycosides cardiaques extremement dangereux.","en":"Foxglove contains extremely dangerous cardiac glycosides that can be fatal."},"symptoms":{"fr":"Vomissements, arythmie cardiaque severe, convulsions, collapsus, mort.","en":"Vomiting, severe cardiac arrhythmia, seizures, collapse, death."},"what_to_do":{"fr":"URGENCE VETERINAIRE IMMEDIATE.","en":"IMMEDIATE VETERINARY EMERGENCY."}},{"names":["kalanchoe","kalanchoe blossfeldiana","flaming katy","bryophyllum","mother of millions"],"toxicity":"toxic","emergency":true,"summary":{"fr":"Le kalanchoe contient des glycosides cardiaques pouvant provoquer des arythmies graves.","en":"Kalanchoe contains cardiac glycosides that can cause serious arrhythmias."},"symptoms":{"fr":"Vomissements, diarrhee, arythmie cardiaque, faiblesse, collapsus.","en":"Vomiting, diarrhea, cardiac arrhythmia, weakness, collapse."},"what_to_do":{"fr":"URGENCE VETERINAIRE.","en":"VETERINARY EMERGENCY."}},{"names":["colchique","autumn crocus","colchicum","meadow saffron","colchique d automne"],"toxicity":"toxic","emergency":true,"summary":{"fr":"Le colchique est extremement toxique. Contient de la colchicine, mortelle a faible dose.","en":"Autumn crocus is extremely toxic. Contains colchicine, fatal at low doses."},"symptoms":{"fr":"Vomissements severes, diarrhee sanglante, insuffisance renale et hepatique, mort.","en":"Severe vomiting, bloody diarrhea, kidney and liver failure, death."},"what_to_do":{"fr":"URGENCE VITALE ABSOLUE.","en":"ABSOLUTE LIFE-THREATENING EMERGENCY."}},{"names":["hellebore","hellébore","nieswurz","elleboro","christmas rose","lenten rose","helleborus","helleborus niger"],"toxicity":"toxic","emergency":true,"summary":{"fr":"L'hellebore est tres toxique avec des glycosides cardiaques et saponines.","en":"Hellebore is very toxic with cardiac glycosides and saponins."},"symptoms":{"fr":"Vomissements, diarrhee, arythmie cardiaque, vertiges, convulsions.","en":"Vomiting, diarrhea, cardiac arrhythmia, dizziness, seizures."},"what_to_do":{"fr":"URGENCE VETERINAIRE IMMEDIATE.","en":"IMMEDIATE VETERINARY EMERGENCY."}},{"names":["datura","jimsonweed","stramoine","datura stramonium","angel trumpet","brugmansia","trompette des anges"],"toxicity":"toxic","emergency":true,"summary":{"fr":"Le datura est extremement toxique. Toutes les parties sont dangereuses.","en":"Datura is extremely toxic. All parts are dangerous."},"symptoms":{"fr":"Dilatation pupilles, tachycardie, hallucinations, hyperthermie, convulsions, coma.","en":"Dilated pupils, tachycardia, hallucinations, hyperthermia, seizures, coma."},"what_to_do":{"fr":"URGENCE VITALE ABSOLUE.","en":"ABSOLUTE LIFE-THREATENING EMERGENCY."}},{"names":["cigue","hemlock","cicuta","schierling","conium maculatum","poison hemlock","water hemlock"],"toxicity":"toxic","emergency":true,"summary":{"fr":"La cigue est mortellement toxique, l'une des plantes les plus dangereuses connues.","en":"Hemlock is fatally toxic, one of the most dangerous plants known."},"symptoms":{"fr":"Paralysie ascendante, convulsions, detresse respiratoire, mort rapide.","en":"Ascending paralysis, seizures, respiratory distress, rapid death."},"what_to_do":{"fr":"URGENCE VITALE ABSOLUE.","en":"ABSOLUTE LIFE-THREATENING EMERGENCY."}},{"names":["ricin","castor bean","ricinus","ricinus communis","castor oil plant"],"toxicity":"toxic","emergency":true,"summary":{"fr":"Le ricin contient de la ricine, l'une des substances les plus toxiques connues. Mortelle.","en":"Castor bean contains ricin, one of the most toxic substances known. Fatal."},"symptoms":{"fr":"Vomissements severes, diarrhee sanglante, defaillance multi-organes, mort.","en":"Severe vomiting, bloody diarrhea, multi-organ failure, death."},"what_to_do":{"fr":"URGENCE VITALE ABSOLUE.","en":"ABSOLUTE LIFE-THREATENING EMERGENCY."}},{"names":["oignon","onion","cebolla","zwiebel","cipolla","cebola","allium cepa","green onion","scallion","shallot","echalote"],"toxicity":"toxic","emergency":true,"summary":{"fr":"L'oignon est TRES toxique pour les chats. Cause anemie hemolytique grave meme en petite quantite.","en":"Onion is VERY toxic to cats. Causes serious hemolytic anemia even in small amounts."},"symptoms":{"fr":"Anemie, lethargie, paleur des gencives, vomissements, essoufflement.","en":"Anemia, lethargy, pale gums, vomiting, shortness of breath."},"what_to_do":{"fr":"URGENCE VETERINAIRE. Meme cuit ou en poudre, l oignon est dangereux.","en":"VETERINARY EMERGENCY. Even cooked or powdered, onion is dangerous."}},{"names":["ail","garlic","ajo","knoblauch","aglio","alho","allium sativum","wild garlic","ail des ours"],"toxicity":"toxic","emergency":true,"summary":{"fr":"L'ail est extremement toxique pour les chats. 5x plus toxique que l oignon.","en":"Garlic is extremely toxic to cats. 5x more toxic than onion."},"symptoms":{"fr":"Anemie hemolytique, lethargie extreme, vomissements, diarrhee, collapsus.","en":"Hemolytic anemia, extreme lethargy, vomiting, diarrhea, collapse."},"what_to_do":{"fr":"URGENCE VETERINAIRE IMMEDIATE.","en":"IMMEDIATE VETERINARY EMERGENCY."}},{"names":["raisin","grape","uva","weintraube","vitis vinifera","raisin sec","dried grapes","sultana"],"toxicity":"toxic","emergency":true,"summary":{"fr":"Le raisin et les raisins secs sont TRES toxiques. Cause insuffisance renale aigue.","en":"Grapes and raisins are VERY toxic. Cause acute kidney failure."},"symptoms":{"fr":"Vomissements, diarrhee, lethargie, douleurs abdominales, insuffisance renale.","en":"Vomiting, diarrhea, lethargy, abdominal pain, kidney failure."},"what_to_do":{"fr":"URGENCE VETERINAIRE IMMEDIATE. Meme 1-2 grains peuvent etre mortels.","en":"IMMEDIATE VETERINARY EMERGENCY. Even 1-2 grapes can be fatal."}},{"names":["cafe","coffee","coffea","coffea arabica","coffee plant","grain de cafe"],"toxicity":"toxic","emergency":true,"summary":{"fr":"Le cafe et les grains de cafe sont tres toxiques pour les chats.","en":"Coffee and coffee beans are very toxic to cats."},"symptoms":{"fr":"Hyperactivite, tremblements, convulsions, arythmie cardiaque, mort possible.","en":"Hyperactivity, tremors, seizures, cardiac arrhythmia, possible death."},"what_to_do":{"fr":"URGENCE VETERINAIRE IMMEDIATE.","en":"IMMEDIATE VETERINARY EMERGENCY."}},{"names":["chocolat","chocolate","schokolade","cioccolato","cacao","theobroma cacao","cocoa","chocolat noir","dark chocolate"],"toxicity":"toxic","emergency":true,"summary":{"fr":"Le chocolat est tres toxique pour les chats. La theobromine est mortelle.","en":"Chocolate is very toxic to cats. Theobromine is lethal."},"symptoms":{"fr":"Vomissements, diarrhee, tremblements, convulsions, arythmie cardiaque, mort.","en":"Vomiting, diarrhea, tremors, seizures, cardiac arrhythmia, death."},"what_to_do":{"fr":"URGENCE VETERINAIRE IMMEDIATE. Le chocolat noir est le plus dangereux.","en":"IMMEDIATE VETERINARY EMERGENCY. Dark chocolate is most dangerous."}},{"names":["nandina","bambou du paradis","heavenly bamboo","nandina domestica","sacred bamboo"],"toxicity":"toxic","emergency":true,"summary":{"fr":"Le nandina est tres toxique. Contient des cyanures pouvant etre mortels.","en":"Nandina is very toxic. Contains cyanides that can be fatal."},"symptoms":{"fr":"Convulsions, difficultes respiratoires, mort possible.","en":"Seizures, breathing difficulties, possible death."},"what_to_do":{"fr":"URGENCE VETERINAIRE IMMEDIATE.","en":"IMMEDIATE VETERINARY EMERGENCY."}},{"names":["troene","privet","ligustrum","liguster","ligustro","ligustrum vulgare","japanese privet"],"toxicity":"toxic","emergency":true,"summary":{"fr":"Le troene est tres toxique pour les chats. Toutes les parties sont dangereuses.","en":"Privet is very toxic to cats. All parts are dangerous."},"symptoms":{"fr":"Vomissements severes, diarrhee, arythmie cardiaque, convulsions, mort.","en":"Severe vomiting, diarrhea, cardiac arrhythmia, seizures, death."},"what_to_do":{"fr":"URGENCE VETERINAIRE IMMEDIATE.","en":"IMMEDIATE VETERINARY EMERGENCY."}},{"names":["buis","boxwood","buxus","boj","buchsbaum","bosso","buxus sempervirens","common boxwood"],"toxicity":"toxic","emergency":true,"summary":{"fr":"Le buis est tres toxique. Contient des alcaloides dangereux.","en":"Boxwood is very toxic. Contains dangerous alkaloids."},"symptoms":{"fr":"Vomissements, convulsions, depression respiratoire, mort possible.","en":"Vomiting, seizures, respiratory depression, possible death."},"what_to_do":{"fr":"URGENCE VETERINAIRE IMMEDIATE.","en":"IMMEDIATE VETERINARY EMERGENCY."}},{"names":["cerisier","cherry tree","cerezo","kirschbaum","ciliegio","prunus avium","sweet cherry","prunus cerasus"],"toxicity":"toxic","emergency":true,"summary":{"fr":"Le cerisier est tres toxique. Les feuilles et noyaux liberent de l acide cyanhydrique.","en":"Cherry tree is very toxic. Leaves and pits release cyanide."},"symptoms":{"fr":"Difficultes respiratoires, dilatation pupilles, convulsions, mort possible.","en":"Breathing difficulties, dilated pupils, seizures, possible death."},"what_to_do":{"fr":"URGENCE VETERINAIRE si ingestion de feuilles ou noyaux.","en":"VETERINARY EMERGENCY if leaves or pits ingested."}},{"names":["rhubarbe","rhubarb","ruibarbo","rhabarber","rabarbaro","rheum rhabarbarum","pie plant"],"toxicity":"toxic","emergency":true,"summary":{"fr":"La rhubarbe est tres toxique. Les feuilles contiennent de l acide oxalique en grande quantite.","en":"Rhubarb is very toxic. Leaves contain large amounts of oxalic acid."},"symptoms":{"fr":"Vomissements severes, tremblements, difficultes respiratoires, insuffisance renale.","en":"Severe vomiting, tremors, breathing difficulties, kidney failure."},"what_to_do":{"fr":"URGENCE VETERINAIRE si ingestion de feuilles.","en":"VETERINARY EMERGENCY if leaves ingested."}},{"names":["laurier cerise","cherry laurel","prunus laurocerasus","english laurel","common laurel","laurier palme"],"toxicity":"toxic","emergency":true,"summary":{"fr":"Le laurier cerise libere de l acide cyanhydrique lors de la digestion.","en":"Cherry laurel releases cyanide during digestion."},"symptoms":{"fr":"Difficultes respiratoires, convulsions, collapsus, mort rapide.","en":"Breathing difficulties, seizures, collapse, rapid death."},"what_to_do":{"fr":"URGENCE VETERINAIRE IMMEDIATE.","en":"IMMEDIATE VETERINARY EMERGENCY."}},{"names":["morelle noire","black nightshade","solanum nigrum","garden nightshade","nightshade berries"],"toxicity":"toxic","emergency":true,"summary":{"fr":"La morelle noire est tres toxique, surtout les baies vertes. Contient de la solanine.","en":"Black nightshade is very toxic, especially green berries. Contains solanine."},"symptoms":{"fr":"Vomissements severes, diarrhee, paralysie, convulsions, troubles cardiaques.","en":"Severe vomiting, diarrhea, paralysis, seizures, cardiac problems."},"what_to_do":{"fr":"URGENCE VETERINAIRE IMMEDIATE.","en":"IMMEDIATE VETERINARY EMERGENCY."}},{"names":["delphinium","pied d alouette","larkspur","ridderspoor","delphinium elatum","consolida"],"toxicity":"toxic","emergency":true,"summary":{"fr":"Le delphinium est tres toxique. Contient des alcaloides diterpenoides dangereux.","en":"Delphinium is very toxic. Contains dangerous diterpenoid alkaloids."},"symptoms":{"fr":"Vomissements severes, tremblements musculaires, paralysie, difficultes respiratoires.","en":"Severe vomiting, muscle tremors, paralysis, breathing difficulties."},"what_to_do":{"fr":"URGENCE VETERINAIRE IMMEDIATE.","en":"IMMEDIATE VETERINARY EMERGENCY."}},{"names":["adenium","desert rose","adenium obesum","impala lily","desert azalea","sabi star"],"toxicity":"toxic","emergency":true,"summary":{"fr":"L adenium est tres toxique. Contient des glycosides cardiaques tres dangereux.","en":"Adenium is very toxic. Contains very dangerous cardiac glycosides."},"symptoms":{"fr":"Vomissements, diarrhee, arythmie cardiaque severe, collapsus, mort possible.","en":"Vomiting, diarrhea, severe cardiac arrhythmia, collapse, possible death."},"what_to_do":{"fr":"URGENCE VETERINAIRE IMMEDIATE.","en":"IMMEDIATE VETERINARY EMERGENCY."}},{"names":["lantana","lantana camara","shrub verbena","red sage lantana"],"toxicity":"toxic","emergency":true,"summary":{"fr":"Le lantana est tres toxique. Surtout les baies non murie.","en":"Lantana is very toxic. Especially unripe berries."},"symptoms":{"fr":"Vomissements severes, faiblesse, difficultes respiratoires, lesions hepatiques.","en":"Severe vomiting, weakness, breathing difficulties, liver damage."},"what_to_do":{"fr":"URGENCE VETERINAIRE IMMEDIATE.","en":"IMMEDIATE VETERINARY EMERGENCY."}},{"names":["arum","lords and ladies","cuckoo pint","wild arum","arum maculatum","jack in the pulpit"],"toxicity":"toxic","emergency":true,"summary":{"fr":"L arum sauvage est tres toxique. Contient des oxalates et des alcaloides puissants.","en":"Wild arum is very toxic. Contains oxalates and powerful alkaloids."},"symptoms":{"fr":"Brulures intenses bouche/gorge, vomissements severes, oedeme larynge, convulsions.","en":"Intense mouth/throat burning, severe vomiting, laryngeal edema, seizures."},"what_to_do":{"fr":"URGENCE VETERINAIRE IMMEDIATE.","en":"IMMEDIATE VETERINARY EMERGENCY."}},{"names":["kalmia","mountain laurel","kalmia latifolia","calico bush","sheep laurel"],"toxicity":"toxic","emergency":true,"summary":{"fr":"Le kalmia est tres toxique. Contient de la grayanotoxine, danger cardiaque grave.","en":"Mountain laurel is very toxic. Contains grayanotoxin, serious cardiac danger."},"symptoms":{"fr":"Vomissements, bradycardie, hypotension, convulsions, mort possible.","en":"Vomiting, bradycardia, hypotension, seizures, possible death."},"what_to_do":{"fr":"URGENCE VETERINAIRE IMMEDIATE.","en":"IMMEDIATE VETERINARY EMERGENCY."}},{"names":["pieris","andromede","pieris japonica","lily-of-the-valley shrub","japanese pieris"],"toxicity":"toxic","emergency":true,"summary":{"fr":"Le pieris est tres toxique. Contient de la grayanotoxine comme l azalee.","en":"Pieris is very toxic. Contains grayanotoxin like azalea."},"symptoms":{"fr":"Vomissements, diarrhee, arythmie cardiaque, convulsions.","en":"Vomiting, diarrhea, cardiac arrhythmia, seizures."},"what_to_do":{"fr":"URGENCE VETERINAIRE IMMEDIATE.","en":"IMMEDIATE VETERINARY EMERGENCY."}},{"names":["gelsemium","faux jasmin","false jasmine","caroline jasmine","yellow jasmine","gelsemium sempervirens"],"toxicity":"toxic","emergency":true,"summary":{"fr":"Le faux jasmin est EXTREMEMENT toxique. Toutes les parties peuvent etre mortelles.","en":"False jasmine is EXTREMELY toxic. All parts can be fatal."},"symptoms":{"fr":"Paralysie, depression respiratoire, convulsions, mort rapide.","en":"Paralysis, respiratory depression, seizures, rapid death."},"what_to_do":{"fr":"URGENCE VITALE ABSOLUE.","en":"ABSOLUTE LIFE-THREATENING EMERGENCY."}},{"names":["tabac","tobacco","tabaco","tabak","tabacco","nicotiana tabacum","tobacco plant","tabac d ornement"],"toxicity":"toxic","emergency":true,"summary":{"fr":"Le tabac est tres toxique. La nicotine provoque des convulsions rapides.","en":"Tobacco is very toxic. Nicotine causes rapid seizures."},"symptoms":{"fr":"Excitation, vomissements, tremblements, convulsions, paralysie, mort.","en":"Excitement, vomiting, tremors, seizures, paralysis, death."},"what_to_do":{"fr":"URGENCE VETERINAIRE IMMEDIATE.","en":"IMMEDIATE VETERINARY EMERGENCY."}},{"names":["tea tree","arbre a the","melaleuca","melaleuca alternifolia","ti tree"],"toxicity":"toxic","emergency":true,"summary":{"fr":"L huile essentielle de tea tree est TRES toxique pour les chats.","en":"Tea tree essential oil is VERY toxic to cats. Never use."},"symptoms":{"fr":"Tremblements, incoordination, depression severe, collapsus, coma.","en":"Tremors, incoordination, severe depression, collapse, coma."},"what_to_do":{"fr":"URGENCE VETERINAIRE IMMEDIATE.","en":"IMMEDIATE VETERINARY EMERGENCY."}},{"names":["bryone","bryony","bryonia","white bryony","bryonia alba","bryonia dioica"],"toxicity":"toxic","emergency":true,"summary":{"fr":"La bryone est tres toxique. Les baies sont particulierement dangereuses.","en":"Bryony is very toxic. Berries are particularly dangerous."},"symptoms":{"fr":"Vomissements severes, diarrhee sanglante, douleurs abdominales, convulsions.","en":"Severe vomiting, bloody diarrhea, abdominal pain, seizures."},"what_to_do":{"fr":"URGENCE VETERINAIRE IMMEDIATE.","en":"IMMEDIATE VETERINARY EMERGENCY."}},{"names":["pavot","opium poppy","papaver somniferum","garden poppy","breadseed poppy"],"toxicity":"toxic","emergency":true,"summary":{"fr":"Le pavot somnifere est tres toxique. Forte teneur en alcaloides opiaces.","en":"Opium poppy is very toxic. High content of opiate alkaloids."},"symptoms":{"fr":"Sedation profonde, depression respiratoire, coma, mort possible.","en":"Deep sedation, respiratory depression, coma, possible death."},"what_to_do":{"fr":"URGENCE VETERINAIRE IMMEDIATE.","en":"IMMEDIATE VETERINARY EMERGENCY."}},{"names":["veratrum","cevadille","faux hellébore","white hellebore","veratrum album","corn lily"],"toxicity":"toxic","emergency":true,"summary":{"fr":"Le veratre est extremement toxique. Peut etre mortel.","en":"Veratrum is extremely toxic. Can be fatal."},"symptoms":{"fr":"Vomissements, bradycardie severe, hypotension, convulsions, mort.","en":"Vomiting, severe bradycardia, hypotension, seizures, death."},"what_to_do":{"fr":"URGENCE VITALE IMMEDIATE.","en":"IMMEDIATE LIFE-THREATENING EMERGENCY."}},{"names":["nicotiane","nicotiana","flowering tobacco","nicotiana alata","ornamental tobacco"],"toxicity":"toxic","emergency":true,"summary":{"fr":"La nicotiane d ornement contient de la nicotine tres toxique pour les chats.","en":"Ornamental tobacco contains nicotine very toxic to cats."},"symptoms":{"fr":"Excitation puis depression, tremblements, vomissements, convulsions.","en":"Excitement then depression, tremors, vomiting, seizures."},"what_to_do":{"fr":"URGENCE VETERINAIRE IMMEDIATE.","en":"IMMEDIATE VETERINARY EMERGENCY."}},{"names":["dieffenbachia","dumb cane","canne muette","leopard lily"],"toxicity":"toxic","emergency":false,"summary":{"fr":"La dieffenbachia contient des cristaux d oxalate. Douleur intense et gonflement buccal.","en":"Dieffenbachia contains oxalate crystals. Intense pain and oral swelling."},"symptoms":{"fr":"Douleur et gonflement buccal, hypersalivation, difficulte a avaler, vomissements.","en":"Oral pain and swelling, excessive drooling, difficulty swallowing, vomiting."},"what_to_do":{"fr":"Rincez la bouche. Consultez un veterinaire si symptomes persistants.","en":"Rinse mouth. See a vet if symptoms persist."}},{"names":["pothos","scindapsus","epipremnum","lierre du diable","devil s ivy","golden pothos","epipremnum aureum"],"toxicity":"toxic","emergency":false,"summary":{"fr":"Le pothos contient des oxalates insolubles irritants.","en":"Pothos contains insoluble oxalates irritating to the mouth and digestive system."},"symptoms":{"fr":"Irritation buccale, hypersalivation, vomissements, difficulte a avaler.","en":"Oral irritation, drooling, vomiting, difficulty swallowing."},"what_to_do":{"fr":"Rincez la bouche. Consultez si vomissements persistants.","en":"Rinse mouth. Consult vet if vomiting persists."}},{"names":["ficus","figuier","ficus benjamina","weeping fig","rubber plant","ficus elastica","caoutchouc","benjamin fig"],"toxicity":"toxic","emergency":false,"summary":{"fr":"Le ficus provoque irritations cutanees et digestives. La seve est particulierement irritante.","en":"Ficus causes skin and digestive irritation. Sap is particularly irritating."},"symptoms":{"fr":"Irritation buccale, vomissements, diarrhee, demangeaisons cutanees.","en":"Oral irritation, vomiting, diarrhea, skin itching if contact with sap."},"what_to_do":{"fr":"Lavez la zone exposee. Consultez si symptomes digestifs importants.","en":"Wash exposed area. Consult vet if significant digestive symptoms."}},{"names":["ficus lyrata","fiddle leaf fig","violin fig","banjo fig"],"toxicity":"toxic","emergency":false,"summary":{"fr":"Le ficus lyrata est toxique comme les autres ficus. La seve irrite peau et muqueuses.","en":"Fiddle leaf fig is toxic like other ficus. Sap irritates skin and mucous membranes."},"symptoms":{"fr":"Irritation buccale, vomissements, diarrhee, irritation cutanee.","en":"Oral irritation, vomiting, diarrhea, skin irritation."},"what_to_do":{"fr":"Rincez. Consultez si symptomes importants.","en":"Rinse. Consult vet if significant symptoms."}},{"names":["dracaena","dragonnier","dragon tree","dracaena marginata","dracaena fragrans","corn plant","janet craig","lucky bamboo","baton de bonheur"],"toxicity":"toxic","emergency":false,"summary":{"fr":"Le dracaena contient des saponines toxiques. Ne pas confondre avec le vrai bambou qui est safe.","en":"Dracaena contains toxic saponins. Don t confuse with true bamboo (safe)."},"symptoms":{"fr":"Vomissements (parfois avec sang), depression, anorexie, hypersalivation, dilatation des pupilles.","en":"Vomiting (sometimes bloody), depression, anorexia, drooling, dilated pupils."},"what_to_do":{"fr":"Consultez un veterinaire. Surveillance 24-48h.","en":"Consult a vet. Monitoring required for 24-48h."}},{"names":["philodendron","heartleaf philodendron","philodendron scandens","sweetheart plant"],"toxicity":"toxic","emergency":false,"summary":{"fr":"Le philodendron contient des oxalates de calcium irritants. Toxique mais rarement mortel.","en":"Philodendron contains irritating calcium oxalates. Toxic but rarely fatal."},"symptoms":{"fr":"Irritation et gonflement buccal, hypersalivation, vomissements, difficultes a avaler.","en":"Oral irritation and swelling, drooling, vomiting, swallowing difficulties."},"what_to_do":{"fr":"Rincez la bouche. Consultez si symptomes severes.","en":"Rinse mouth. Consult vet if severe symptoms."}},{"names":["monstera","monstera deliciosa","swiss cheese plant","plante gruyere","ceriman","split leaf philodendron"],"toxicity":"toxic","emergency":false,"summary":{"fr":"Le monstera contient des oxalates de calcium qui irritent fortement la bouche.","en":"Monstera contains calcium oxalates that strongly irritate the mouth and digestive system."},"symptoms":{"fr":"Brulures buccales, hypersalivation intense, vomissements, oedeme de la gorge possible.","en":"Oral burning, intense drooling, vomiting, possible throat swelling."},"what_to_do":{"fr":"Rincez la bouche avec eau froide. Urgence si difficultes respiratoires.","en":"Rinse mouth with cold water. Emergency if breathing difficulties."}},{"names":["spathiphyllum","peace lily","fleur de lune","spath","spathe flower","white sails"],"toxicity":"toxic","emergency":false,"summary":{"fr":"Le spathiphyllum contient des oxalates de calcium. Irritant pour la bouche.","en":"Peace lily contains calcium oxalates. Irritating to mouth and digestive system."},"symptoms":{"fr":"Brulures buccales intenses, hypersalivation, vomissements, difficulte a avaler.","en":"Intense oral burning, excessive drooling, vomiting, swallowing difficulty."},"what_to_do":{"fr":"Rincez abondamment la bouche. Consultez si symptomes severes.","en":"Rinse mouth thoroughly. Consult vet if severe symptoms."}},{"names":["zamioculcas","zz plant","plante zz","zanzibar gem","zuzu plant"],"toxicity":"toxic","emergency":false,"summary":{"fr":"Le zamioculcas contient des oxalates de calcium irritants.","en":"ZZ plant contains irritating calcium oxalates."},"symptoms":{"fr":"Irritation buccale, vomissements, hypersalivation.","en":"Oral irritation, vomiting, drooling."},"what_to_do":{"fr":"Rincez la bouche. Consultez si symptomes persistent.","en":"Rinse mouth. Consult vet if symptoms persist."}},{"names":["houx","holly","acebo","stechpalme","agrifoglio","ilex","ilex aquifolium","american holly","christmas holly"],"toxicity":"toxic","emergency":false,"summary":{"fr":"Le houx est moderement toxique. Les baies sont les plus dangereuses.","en":"Holly is moderately toxic. Berries are the most dangerous part."},"symptoms":{"fr":"Vomissements, diarrhee, lethargie, perte d equilibre.","en":"Vomiting, diarrhea, lethargy, loss of balance."},"what_to_do":{"fr":"Consultez si ingestion de baies ou symptomes importants.","en":"Consult a vet if berries ingested or significant symptoms."}},{"names":["wisteria","glycine","glicinia","blauregen","glicine","wisteria sinensis","wisteria floribunda"],"toxicity":"toxic","emergency":false,"summary":{"fr":"La glycine est toxique, surtout les graines et gousses.","en":"Wisteria is toxic, especially seeds and pods."},"symptoms":{"fr":"Vomissements, diarrhee, depression, hypersalivation.","en":"Vomiting, diarrhea, depression, drooling."},"what_to_do":{"fr":"Consultez un veterinaire. Urgence si ingestion de graines.","en":"Consult a vet. Emergency if seeds ingested."}},{"names":["calla","arum lily","calla lily","zantedeschia","pig lily","white arum","trumpet lily"],"toxicity":"toxic","emergency":false,"summary":{"fr":"Le calla contient des oxalates de calcium tres irritants.","en":"Calla contains very irritating calcium oxalates."},"symptoms":{"fr":"Brulures buccales severes, hypersalivation, vomissements.","en":"Severe oral burns, drooling, vomiting."},"what_to_do":{"fr":"Rincez abondamment. Urgence si difficultes respiratoires.","en":"Rinse thoroughly. Emergency if breathing difficulties."}},{"names":["alocasia","elephant ear","alocasia amazonica","african mask","taro","colocasia","dasheen"],"toxicity":"toxic","emergency":false,"summary":{"fr":"L alocasia contient des oxalates de calcium tres irritants.","en":"Alocasia contains very irritating calcium oxalates."},"symptoms":{"fr":"Irritation et gonflement buccal severes, hypersalivation, vomissements.","en":"Severe oral irritation and swelling, drooling, vomiting."},"what_to_do":{"fr":"Rincez la bouche. Consultez si symptomes severes.","en":"Rinse mouth. Consult vet if severe symptoms."}},{"names":["caladium","angel wings","caladium bicolor","heart of jesus","elephant ear caladium"],"toxicity":"toxic","emergency":false,"summary":{"fr":"Le caladium contient des oxalates de calcium tres irritants.","en":"Caladium contains very irritating calcium oxalates."},"symptoms":{"fr":"Irritation buccale intense, hypersalivation, vomissements.","en":"Intense oral irritation, drooling, vomiting."},"what_to_do":{"fr":"Rincez la bouche. Consultez un veterinaire.","en":"Rinse mouth. Consult a vet."}},{"names":["anthurium","flamingo flower","laceleaf","anthure","tail flower"],"toxicity":"toxic","emergency":false,"summary":{"fr":"L anthurium contient des oxalates de calcium irritants.","en":"Anthurium contains irritating calcium oxalates."},"symptoms":{"fr":"Irritation buccale, hypersalivation, vomissements.","en":"Oral irritation, drooling, vomiting."},"what_to_do":{"fr":"Rincez la bouche. Consultez si symptomes persistent.","en":"Rinse mouth. Consult vet if symptoms persist."}},{"names":["aglaonema","chinese evergreen","aglaoneme","philippine evergreen"],"toxicity":"toxic","emergency":false,"summary":{"fr":"L aglaonema contient des oxalates de calcium. Moderement toxique.","en":"Aglaonema contains calcium oxalates. Moderately toxic to cats."},"symptoms":{"fr":"Irritation buccale, vomissements, hypersalivation.","en":"Oral irritation, vomiting, drooling."},"what_to_do":{"fr":"Rincez la bouche. Consultez si symptomes importants.","en":"Rinse mouth. Consult vet if significant symptoms."}},{"names":["syngonium","arrowhead plant","arrowhead vine","goosefoot plant","nephthytis"],"toxicity":"toxic","emergency":false,"summary":{"fr":"Le syngonium contient des oxalates de calcium. Toxique pour les chats.","en":"Syngonium contains calcium oxalates. Toxic to cats."},"symptoms":{"fr":"Irritation buccale, vomissements, hypersalivation.","en":"Oral irritation, vomiting, drooling."},"what_to_do":{"fr":"Rincez la bouche. Consultez un veterinaire.","en":"Rinse mouth. Consult a vet."}},{"names":["croton","codiaeum","garden croton","variegated croton","codiaeum variegatum"],"toxicity":"toxic","emergency":false,"summary":{"fr":"Le croton est toxique. La seve et les feuilles contiennent des composes irritants.","en":"Croton is toxic. Sap and leaves contain irritating compounds."},"symptoms":{"fr":"Irritation buccale, vomissements, diarrhee, irritation cutanee.","en":"Oral irritation, vomiting, diarrhea, skin irritation."},"what_to_do":{"fr":"Consultez si ingestion ou symptomes cutanes importants.","en":"Consult vet if ingestion or significant skin symptoms."}},{"names":["schefflera","umbrella plant","umbrella tree","schefflera actinophylla","octopus tree"],"toxicity":"toxic","emergency":false,"summary":{"fr":"Le schefflera contient des oxalates de calcium. Moderement toxique.","en":"Schefflera contains calcium oxalates. Moderately toxic to cats."},"symptoms":{"fr":"Irritation buccale, vomissements, hypersalivation, diarrhee.","en":"Oral irritation, vomiting, drooling, diarrhea."},"what_to_do":{"fr":"Consultez si symptomes importants.","en":"Consult vet if significant symptoms."}},{"names":["yucca","yucca elephantipes","spineless yucca","yucca cane","yucca guatemalensis"],"toxicity":"toxic","emergency":false,"summary":{"fr":"Le yucca contient des saponines toxiques pour les chats.","en":"Yucca contains saponins toxic to cats."},"symptoms":{"fr":"Vomissements, diarrhee, depression, incoordination.","en":"Vomiting, diarrhea, depression, incoordination."},"what_to_do":{"fr":"Consultez si symptomes importants.","en":"Consult vet if significant symptoms."}},{"names":["lierre","ivy","hedera","hiedra","efeu","hedera helix","english ivy","common ivy"],"toxicity":"toxic","emergency":false,"summary":{"fr":"Le lierre est toxique. Les feuilles et baies contiennent des heliederasaponines.","en":"Ivy is toxic. Leaves and berries contain hederasaponins."},"symptoms":{"fr":"Irritation buccale, vomissements, diarrhee, hypersalivation, dermatite.","en":"Oral irritation, vomiting, diarrhea, drooling, dermatitis."},"what_to_do":{"fr":"Consultez si ingestion ou irritation cutanee importante.","en":"Consult vet if ingestion or significant skin irritation."}},{"names":["euphorbe","euphorbia","spurge","wolfsmilch","euforbia","euphorbia tirucalli","pencil cactus","firestick plant"],"toxicity":"toxic","emergency":false,"summary":{"fr":"Les euphorbes produisent un latex blanc tres irritant, toxique pour les chats.","en":"Euphorbias produce very irritating white latex, toxic to cats."},"symptoms":{"fr":"Irritation severe bouche/yeux, vomissements, diarrhee.","en":"Severe mouth/eye irritation, vomiting, diarrhea."},"what_to_do":{"fr":"Rincez abondamment. Consultez si symptomes oculaires ou ingestion.","en":"Rinse thoroughly. Consult vet if eye symptoms or ingestion."}},{"names":["jacinthe","hyacinth","jacinto","hyazinthe","giacinto","hyacinthus","hyacinthus orientalis"],"toxicity":"toxic","emergency":false,"summary":{"fr":"La jacinthe est toxique, surtout le bulbe. Contient des alcaloides irritants.","en":"Hyacinth is toxic, especially the bulb. Contains irritating alkaloids."},"symptoms":{"fr":"Vomissements, diarrhee, depression, tremblements.","en":"Vomiting, diarrhea, depression, tremors."},"what_to_do":{"fr":"Consultez un veterinaire. Urgence si ingestion du bulbe.","en":"Consult a vet. Emergency if bulb ingested."}},{"names":["iris","flag","schwertlilie","iris germanica","iris versicolor","bearded iris","fleur de lis"],"toxicity":"toxic","emergency":false,"summary":{"fr":"L iris est toxique, surtout le rhizome. Contient des irisinines.","en":"Iris is toxic, especially the rhizome. Contains irisinines."},"symptoms":{"fr":"Salivation excessive, vomissements, diarrhee, lethargie.","en":"Excessive salivation, vomiting, diarrhea, lethargy."},"what_to_do":{"fr":"Consultez si ingestion importante.","en":"Consult a vet if significant ingestion."}},{"names":["amaryllis","hippeastrum","belladonna lily","amaryllis rouge","hippeastrum vittatum"],"toxicity":"toxic","emergency":false,"summary":{"fr":"L amaryllis est toxique, surtout le bulbe. Contient de la lycorine.","en":"Amaryllis is toxic, especially the bulb. Contains lycorine."},"symptoms":{"fr":"Vomissements, diarrhee, tremblements, hypersalivation, lethargie.","en":"Vomiting, diarrhea, tremors, drooling, lethargy."},"what_to_do":{"fr":"Consultez un veterinaire. Urgence si ingestion du bulbe.","en":"Consult vet. Emergency if bulb ingested."}},{"names":["pervenche","vinca","periwinkle","vincapervinca","vinca minor","vinca major"],"toxicity":"toxic","emergency":false,"summary":{"fr":"La pervenche contient des alcaloides (vincristine) toxiques pour les chats.","en":"Periwinkle contains alkaloids (vincristine) toxic to cats."},"symptoms":{"fr":"Vomissements, diarrhee, depression, hypotension, tremblements.","en":"Vomiting, diarrhea, depression, hypotension, tremors."},"what_to_do":{"fr":"Consultez un veterinaire rapidement.","en":"Consult a vet promptly."}},{"names":["pervenche de madagascar","vinca rosea","catharanthus roseus","madagascar periwinkle","rose periwinkle"],"toxicity":"toxic","emergency":false,"summary":{"fr":"La pervenche de Madagascar est toxique. Contient vincristine et vincaleucoblastine.","en":"Madagascar periwinkle is toxic. Contains vincristine and vincaleucoblastine."},"symptoms":{"fr":"Vomissements, diarrhee, depression, hypotension, troubles nerveux.","en":"Vomiting, diarrhea, depression, hypotension, nervous disorders."},"what_to_do":{"fr":"Consultez un veterinaire rapidement.","en":"Consult a vet promptly."}},{"names":["lupin","lupine","lupinus","lupinus polyphyllus","garden lupin","bluebonnet"],"toxicity":"toxic","emergency":false,"summary":{"fr":"Le lupin est toxique pour les chats, surtout les graines. Contient des alcaloides.","en":"Lupin is toxic to cats, especially seeds. Contains alkaloids."},"symptoms":{"fr":"Vomissements, diarrhee, tremblements, depression nerveuse.","en":"Vomiting, diarrhea, tremors, nervous depression."},"what_to_do":{"fr":"Consultez si ingestion de graines.","en":"Consult vet, especially if seeds ingested."}},{"names":["chevrefeuille","honeysuckle","lonicera","madreselva","geisblatt","lonicera japonica"],"toxicity":"toxic","emergency":false,"summary":{"fr":"Le chevre-feuille est moderement toxique, surtout les baies.","en":"Honeysuckle is moderately toxic, especially the berries."},"symptoms":{"fr":"Vomissements, diarrhee, depression, arythmie cardiaque possible.","en":"Vomiting, diarrhea, depression, possible cardiac arrhythmia."},"what_to_do":{"fr":"Consultez si ingestion de baies.","en":"Consult vet if berries ingested."}},{"names":["cineraire","cineraria","senecon","senecio","dusty miller","cineraria cruenta","pericallis"],"toxicity":"toxic","emergency":false,"summary":{"fr":"Le senecon/cineraria est toxique. Contient des alcaloides pyrrolizidiniques.","en":"Senecio/cineraria is toxic. Contains pyrrolizidine alkaloids."},"symptoms":{"fr":"Vomissements, diarrhee, lesions hepatiques a long terme.","en":"Vomiting, diarrhea, long-term liver damage."},"what_to_do":{"fr":"Consultez un veterinaire. Toxicite hepatique cumulative.","en":"Consult vet. Cumulative liver toxicity."}},{"names":["hosta","hosta sieboldiana","hosta fortunei","plantain lily","funkia"],"toxicity":"toxic","emergency":false,"summary":{"fr":"L hosta est toxique pour les chats. Contient des saponines.","en":"Hosta is toxic to cats. Contains saponins."},"symptoms":{"fr":"Vomissements, diarrhee, depression.","en":"Vomiting, diarrhea, depression."},"what_to_do":{"fr":"Consultez si ingestion importante.","en":"Consult vet if significant ingestion."}},{"names":["agapanthe","agapanthus","african lily","lily of the nile","agapanthus africanus"],"toxicity":"toxic","emergency":false,"summary":{"fr":"L agapanthe est toxique. Contient des saponines.","en":"Agapanthus is toxic to cats. Contains saponins."},"symptoms":{"fr":"Vomissements, diarrhee, depression.","en":"Vomiting, diarrhea, depression."},"what_to_do":{"fr":"Consultez si ingestion importante.","en":"Consult vet if significant ingestion."}},{"names":["pommier","apple tree","manzano","apfelbaum","melo","malus","malus domestica","crabapple"],"toxicity":"toxic","emergency":false,"summary":{"fr":"Le pommier est toxique. Les pepins contiennent de l acide cyanhydrique.","en":"Apple tree is toxic. Seeds contain cyanide."},"symptoms":{"fr":"Vomissements, difficultes respiratoires si pepins ingeres en grande quantite.","en":"Vomiting, breathing difficulties if seeds ingested in large quantity."},"what_to_do":{"fr":"Consultez si ingestion de pepins ou feuilles.","en":"Consult vet if seeds or leaves ingested."}},{"names":["pecher","peach tree","melocotonero","pfirsich","pesco","prunus persica","nectarine"],"toxicity":"toxic","emergency":false,"summary":{"fr":"Le pecher est toxique. Les feuilles et noyaux contiennent des composes cyanogenes.","en":"Peach tree is toxic. Leaves and pits contain cyanogenic compounds."},"symptoms":{"fr":"Vomissements, difficultes respiratoires si feuilles ou noyaux ingeres.","en":"Vomiting, breathing difficulties if leaves or pits ingested."},"what_to_do":{"fr":"Consultez si ingestion de feuilles ou noyaux.","en":"Consult vet if leaves or pits ingested."}},{"names":["prunier","plum tree","ciruelo","pflaumenbaum","susino","prunus domestica","cherry plum"],"toxicity":"toxic","emergency":false,"summary":{"fr":"Le prunier est toxique. Feuilles et noyaux contiennent des cyanures.","en":"Plum tree is toxic. Leaves and pits contain cyanides."},"symptoms":{"fr":"Vomissements, difficultes respiratoires, tremblements.","en":"Vomiting, breathing difficulties, tremors."},"what_to_do":{"fr":"Consultez si ingestion.","en":"Consult vet if ingestion."}},{"names":["poireau","leek","puerro","lauch","porro","allium porrum","garden leek"],"toxicity":"toxic","emergency":false,"summary":{"fr":"Le poireau est toxique pour les chats comme tous les alliums.","en":"Leek is toxic to cats like all alliums. Can cause anemia."},"symptoms":{"fr":"Vomissements, anemie, lethargie si ingestion reguliere.","en":"Vomiting, anemia, lethargy if regular ingestion."},"what_to_do":{"fr":"Consultez si ingestion importante.","en":"Consult vet if significant ingestion."}},{"names":["ciboulette","chive","cebollino","schnittlauch","allium schoenoprasum","chive herb"],"toxicity":"toxic","emergency":false,"summary":{"fr":"La ciboulette est toxique pour les chats. Famille des alliums toxiques.","en":"Chive is toxic to cats. Belongs to the toxic allium family."},"symptoms":{"fr":"Vomissements, diarrhee, anemie possible si ingestion reguliere.","en":"Vomiting, diarrhea, possible anemia if regular ingestion."},"what_to_do":{"fr":"Evitez. Consultez si ingestion.","en":"Avoid. Consult vet if ingestion."}},{"names":["avocat","avocado","aguacate","persea americana","alligator pear"],"toxicity":"toxic","emergency":false,"summary":{"fr":"L avocat contient de la persine toxique. Les feuilles, peau et noyau sont dangereux.","en":"Avocado contains toxic persin. Leaves, skin and pit are dangerous."},"symptoms":{"fr":"Vomissements, diarrhee, difficultes respiratoires si feuilles ou noyau ingeres.","en":"Vomiting, diarrhea, breathing difficulties if leaves or pit ingested."},"what_to_do":{"fr":"Evitez les feuilles et noyaux. Consultez si ingestion non charnue.","en":"Avoid leaves and pit. Consult if non-flesh parts ingested."}},{"names":["noix de macadamia","macadamia","macadamia nut","macadamia integrifolia"],"toxicity":"toxic","emergency":false,"summary":{"fr":"Les noix de macadamia sont toxiques pour les chats.","en":"Macadamia nuts are toxic to cats."},"symptoms":{"fr":"Faiblesse, tremblements, hyperthermie, vomissements, depression.","en":"Weakness, tremors, hyperthermia, vomiting, depression."},"what_to_do":{"fr":"Consultez un veterinaire rapidement.","en":"Consult a vet promptly."}},{"names":["anemone","windblume","anemone coronaria","poppy anemone","windflower"],"toxicity":"toxic","emergency":false,"summary":{"fr":"L anemone est toxique. Contient de la protoanemonine irritante.","en":"Anemone is toxic. Contains irritating protoanemonin."},"symptoms":{"fr":"Irritation buccale, vomissements, diarrhee, tremblements possibles.","en":"Oral irritation, vomiting, diarrhea, possible tremors."},"what_to_do":{"fr":"Consultez un veterinaire rapidement.","en":"Consult a vet promptly."}},{"names":["renoncule","buttercup","ranunculus","hahnenfuss","ranunculus acris","meadow buttercup"],"toxicity":"toxic","emergency":false,"summary":{"fr":"La renoncule est toxique. Contient de la protoanemonine irritante.","en":"Buttercup is toxic. Contains irritating protoanemonin."},"symptoms":{"fr":"Irritation buccale et cutanee, vomissements, diarrhee.","en":"Oral and skin irritation, vomiting, diarrhea."},"what_to_do":{"fr":"Rincez. Consultez si symptomes persistants.","en":"Rinse. Consult vet if persistent symptoms."}},{"names":["ancolie","aquilegia","columbine","akelei","aquilegia vulgaris","granny s bonnet"],"toxicity":"toxic","emergency":false,"summary":{"fr":"L ancolie est toxique. Contient des alcaloides et des cyanures.","en":"Columbine is toxic. Contains alkaloids and cyanides."},"symptoms":{"fr":"Vomissements, diarrhee, tremblements, depression.","en":"Vomiting, diarrhea, tremors, depression."},"what_to_do":{"fr":"Consultez si ingestion importante.","en":"Consult vet if significant ingestion."}},{"names":["perce-neige","snowdrop","campanilla de invierno","schneeglockchen","galanthus","galanthus nivalis"],"toxicity":"toxic","emergency":false,"summary":{"fr":"Le perce-neige est moderement toxique. Contient de la galanthamine.","en":"Snowdrop is moderately toxic. Contains galanthamine."},"symptoms":{"fr":"Vomissements, diarrhee, lethargie, bradycardie possible.","en":"Vomiting, diarrhea, lethargy, possible bradycardia."},"what_to_do":{"fr":"Consultez si ingestion du bulbe.","en":"Consult vet if bulb ingested."}},{"names":["scille","squill","scilla","scilla siberica","siberian squill","glory of the snow","chionodoxa"],"toxicity":"toxic","emergency":false,"summary":{"fr":"La scille est toxique. Contient des glycosides cardiaques.","en":"Squill is toxic. Contains cardiac glycosides."},"symptoms":{"fr":"Vomissements, diarrhee, arythmie cardiaque possible.","en":"Vomiting, diarrhea, possible cardiac arrhythmia."},"what_to_do":{"fr":"Consultez un veterinaire rapidement.","en":"Consult a vet promptly."}},{"names":["jacinthe des bois","english bluebell","hyacinthoides non-scripta","wild hyacinth","wood hyacinth","spanish bluebell"],"toxicity":"toxic","emergency":false,"summary":{"fr":"La jacinthe des bois est toxique. Contient des glycosides.","en":"English bluebell is toxic. Contains glycosides."},"symptoms":{"fr":"Vomissements, diarrhee, arythmie cardiaque possible.","en":"Vomiting, diarrhea, possible cardiac arrhythmia."},"what_to_do":{"fr":"Consultez si ingestion importante.","en":"Consult vet if significant ingestion."}},{"names":["fritillaire","fritillary","fritillaria","crown imperial","fritillaria imperialis","fritillaria meleagris"],"toxicity":"toxic","emergency":false,"summary":{"fr":"La fritillaire est toxique pour les chats.","en":"Fritillary is toxic to cats."},"symptoms":{"fr":"Vomissements, diarrhee, arythmie cardiaque possible.","en":"Vomiting, diarrhea, possible cardiac arrhythmia."},"what_to_do":{"fr":"Consultez si ingestion.","en":"Consult vet if ingestion."}},{"names":["nerine","nerine bowdenii","guernsey lily","nerine sarniensis"],"toxicity":"toxic","emergency":false,"summary":{"fr":"La nerine est toxique. Contient de la lycorine.","en":"Nerine is toxic. Contains lycorine."},"symptoms":{"fr":"Vomissements, diarrhee, hypersalivation, tremblements.","en":"Vomiting, diarrhea, drooling, tremors."},"what_to_do":{"fr":"Consultez si ingestion importante.","en":"Consult vet if significant ingestion."}},{"names":["asparagus fougere","asparagus fern","foxtail fern","asparagus setaceus","asparagus densiflorus","emerald feather"],"toxicity":"toxic","emergency":false,"summary":{"fr":"La fougere asperge est toxique, surtout les baies.","en":"Asparagus fern is toxic, especially berries."},"symptoms":{"fr":"Irritation cutanee, vomissements, diarrhee, douleurs abdominales si baies.","en":"Skin irritation, vomiting, diarrhea, abdominal pain if berries ingested."},"what_to_do":{"fr":"Rincez si contact cutane. Consultez si ingestion de baies.","en":"Rinse if skin contact. Consult if berries ingested."}},{"names":["plumeria","frangipani","plumeria rubra","temple tree","graveyard flower"],"toxicity":"toxic","emergency":false,"summary":{"fr":"Le frangipani est toxique. La seve blanche est particulierement irritante.","en":"Frangipani is toxic. White sap is particularly irritating."},"symptoms":{"fr":"Vomissements, diarrhee, irritation buccale et cutanee.","en":"Vomiting, diarrhea, oral and skin irritation."},"what_to_do":{"fr":"Consultez si ingestion ou contact avec la seve.","en":"Consult vet if ingestion or contact with sap."}},{"names":["lobelia","lobelie","lobelia erinus","cardinal flower","lobelia cardinalis"],"toxicity":"toxic","emergency":false,"summary":{"fr":"La lobelie contient de la lobeline, alcaloide toxique.","en":"Lobelia contains lobeline, an alkaloid toxic to cats."},"symptoms":{"fr":"Vomissements, depression, tremblements, difficultes respiratoires.","en":"Vomiting, depression, tremors, breathing difficulties."},"what_to_do":{"fr":"Consultez un veterinaire rapidement.","en":"Consult a vet promptly."}},{"names":["coquelicot","poppy annual","amapola","mohn","papavero","papaver rhoeas","corn poppy","field poppy"],"toxicity":"toxic","emergency":false,"summary":{"fr":"Le coquelicot contient des alcaloides opiaces legers.","en":"Poppy contains mild opiate alkaloids."},"symptoms":{"fr":"Sedation, depression, vomissements, incoordination.","en":"Sedation, depression, vomiting, incoordination."},"what_to_do":{"fr":"Consultez si sedation marquee ou ingestion importante.","en":"Consult vet if marked sedation or significant ingestion."}},{"names":["chelidoine","celandine","celidonia","schollkraut","chelidonium","greater celandine"],"toxicity":"toxic","emergency":false,"summary":{"fr":"La chelidoine est toxique. La seve orange contient des alcaloides irritants.","en":"Celandine is toxic. Orange sap contains irritating alkaloids."},"symptoms":{"fr":"Irritation buccale, vomissements, diarrhee, sedation.","en":"Oral irritation, vomiting, diarrhea, sedation."},"what_to_do":{"fr":"Rincez. Consultez rapidement.","en":"Rinse. Consult a vet promptly."}},{"names":["sureau","elderberry","sambucus","sauco","holunder","sambuco","sambucus nigra","black elderberry"],"toxicity":"toxic","emergency":false,"summary":{"fr":"Le sureau est toxique (feuilles, ecorce, baies crues). Baies cuites moins dangereuses.","en":"Elder is toxic (leaves, bark, raw berries). Cooked berries less dangerous."},"symptoms":{"fr":"Vomissements, diarrhee, nausees, faiblesse.","en":"Vomiting, diarrhea, nausea, weakness."},"what_to_do":{"fr":"Consultez si ingestion de parties vertes ou baies crues.","en":"Consult vet if green parts or raw berries ingested."}},{"names":["symphorine","snowberry","symphoricarpos","coral berry","symphoricarpos albus","waxberry"],"toxicity":"toxic","emergency":false,"summary":{"fr":"La symphorine est toxique, surtout les baies.","en":"Snowberry is toxic, especially berries."},"symptoms":{"fr":"Vomissements, diarrhee, depression, troubles nerveux legers.","en":"Vomiting, diarrhea, depression, mild nervous disorders."},"what_to_do":{"fr":"Consultez si ingestion de baies.","en":"Consult vet if berries ingested."}},{"names":["cotoneaster","cotoneaster horizontalis","rock spray","cotoneaster franchetii"],"toxicity":"toxic","emergency":false,"summary":{"fr":"Le cotoneaster est moderement toxique, surtout les baies.","en":"Cotoneaster is moderately toxic, especially berries."},"symptoms":{"fr":"Vomissements, diarrhee, difficultes respiratoires si baies en grande quantite.","en":"Vomiting, diarrhea, breathing difficulties if large quantity of berries."},"what_to_do":{"fr":"Consultez si ingestion de baies.","en":"Consult vet if berries ingested."}},{"names":["tomate plante","tomato plant","feuilles de tomate","tomato leaves"],"toxicity":"toxic","emergency":false,"summary":{"fr":"La plante de tomate (feuilles/tiges) est toxique mais le fruit mure est sans danger.","en":"Tomato plant (leaves/stems) is toxic but ripe fruit is safe in small amounts."},"symptoms":{"fr":"Vomissements, diarrhee, lethargie si feuilles ingrees.","en":"Vomiting, diarrhea, lethargy if leaves ingested."},"what_to_do":{"fr":"Evitez les feuilles et tiges. Consultez si ingestion de feuilles.","en":"Avoid leaves and stems. Consult if leaf ingestion."}},{"names":["pomme de terre plante","potato plant","feuilles pomme de terre","potato leaves green"],"toxicity":"toxic","emergency":false,"summary":{"fr":"La plante de pomme de terre contient de la solanine toxique dans les parties vertes.","en":"Potato plant contains toxic solanine in green parts."},"symptoms":{"fr":"Vomissements, diarrhee, depression, tremblements si parties vertes ingrees.","en":"Vomiting, diarrhea, depression, tremors if green parts ingested."},"what_to_do":{"fr":"Evitez les feuilles, tiges et pommes de terre vertes. Consultez si ingestion.","en":"Avoid leaves, stems and green potatoes. Consult if ingestion."}},{"names":["bourdaine","alder buckthorn","rhamnus frangula","frangula alnus","glossy buckthorn"],"toxicity":"toxic","emergency":false,"summary":{"fr":"La bourdaine est toxique. Contient des anthraquinones purgatifs puissants.","en":"Alder buckthorn is toxic. Contains powerful purgative anthraquinones."},"symptoms":{"fr":"Vomissements violents, diarrhee severe, crampes abdominales.","en":"Violent vomiting, severe diarrhea, abdominal cramps."},"what_to_do":{"fr":"Consultez un veterinaire rapidement.","en":"Consult a vet promptly."}},{"names":["nerprun","buckthorn","rhamnus","rhamnus cathartica","common buckthorn"],"toxicity":"toxic","emergency":false,"summary":{"fr":"Le nerprun est toxique. Puissant purgatif.","en":"Buckthorn is toxic. Powerful purgative."},"symptoms":{"fr":"Vomissements, diarrhee severe.","en":"Vomiting, severe diarrhea."},"what_to_do":{"fr":"Consultez si ingestion.","en":"Consult vet if ingestion."}},{"names":["marronnier","horse chestnut","aesculus hippocastanum","conker tree","buckeye","aesculus"],"toxicity":"toxic","emergency":false,"summary":{"fr":"Le marronnier est toxique pour les chats.","en":"Horse chestnut is toxic to cats."},"symptoms":{"fr":"Vomissements, diarrhee, depression, tremblements musculaires.","en":"Vomiting, diarrhea, depression, muscle tremors."},"what_to_do":{"fr":"Consultez si ingestion de marrons ou feuilles.","en":"Consult vet if chestnuts or leaves ingested."}},{"names":["agave","agave americana","century plant","maguey","agave attenuata","foxtail agave"],"toxicity":"toxic","emergency":false,"summary":{"fr":"L agave est toxique. Contient des saponines et seve irritante.","en":"Agave is toxic. Contains saponins and irritating sap."},"symptoms":{"fr":"Irritation cutanee, vomissements, diarrhee.","en":"Skin irritation, vomiting, diarrhea."},"what_to_do":{"fr":"Rincez si contact cutane. Consultez si ingestion.","en":"Rinse if skin contact. Consult vet if ingestion."}},{"names":["iris des marais","yellow flag iris","iris pseudacorus","water iris","yellow water iris"],"toxicity":"toxic","emergency":false,"summary":{"fr":"L iris des marais est toxique comme tous les iris.","en":"Yellow flag iris is toxic to cats like all irises."},"symptoms":{"fr":"Salivation excessive, vomissements, diarrhee, lethargie.","en":"Excessive salivation, vomiting, diarrhea, lethargy."},"what_to_do":{"fr":"Consultez si ingestion importante.","en":"Consult vet if significant ingestion."}},{"names":["allium ornement","ornamental onion","allium giganteum","giant allium","allium hollandicum","purple sensation allium"],"toxicity":"toxic","emergency":false,"summary":{"fr":"Comme tous les alliums, ces plantes ornementales sont toxiques pour les chats.","en":"Like all alliums, ornamental alliums are toxic to cats."},"symptoms":{"fr":"Anemie hemolytique, vomissements, lethargie.","en":"Hemolytic anemia, vomiting, lethargy."},"what_to_do":{"fr":"Consultez. Urgence si ingestion reguliere.","en":"Consult vet. Emergency if regular ingestion."}},{"names":["lierre de virginie","virginia creeper","parthenocissus","parthenocissus tricuspidata","five-leaf ivy","boston ivy"],"toxicity":"toxic","emergency":false,"summary":{"fr":"Le lierre de Virginie est moderement toxique pour les chats.","en":"Virginia creeper is moderately toxic to cats."},"symptoms":{"fr":"Irritation buccale, vomissements, diarrhee.","en":"Oral irritation, vomiting, diarrhea."},"what_to_do":{"fr":"Consultez si ingestion importante.","en":"Consult vet if significant ingestion."}},{"names":["consoude","comfrey","consuelda","beinwell","symphytum","symphytum officinale"],"toxicity":"toxic","emergency":false,"summary":{"fr":"La consoude peut etre toxique pour le foie a long terme (alcaloides pyrrolizidiniques).","en":"Comfrey can be toxic to cat livers long-term (pyrrolizidine alkaloids)."},"symptoms":{"fr":"Toxicite hepatique cumulative. Symptomes souvent tardifs.","en":"Cumulative liver toxicity. Symptoms often delayed."},"what_to_do":{"fr":"Evitez l acces. Consultez si ingestion reguliere.","en":"Prevent access. Consult vet if regular ingestion."}},{"names":["aloe vera","aloe","aloes","aloe barbadensis","aloe vera gel","barbados aloe","true aloe"],"toxicity":"warning","emergency":false,"summary":{"fr":"L aloe vera est moderement toxique. La seve jaune (latex) est la plus dangereuse.","en":"Aloe vera is moderately toxic to cats. The yellow sap (latex) is the most dangerous part."},"symptoms":{"fr":"Vomissements, diarrhee (parfois rougeatre), lethargie, tremblements.","en":"Vomiting, diarrhea (sometimes reddish), lethargy, tremors."},"what_to_do":{"fr":"Consultez un veterinaire. Generalement pas mortel mais necessite surveillance.","en":"Consult a vet. Generally not fatal but requires monitoring."}},{"names":["sansevieria","snake plant","dracaena trifasciata","mother-in-law tongue","viper bowstring hemp","plante serpent","sanseviere"],"toxicity":"warning","emergency":false,"summary":{"fr":"La sansevierie contient des saponines. Moderement toxique.","en":"Snake plant contains saponins. Moderately toxic."},"symptoms":{"fr":"Nausees, vomissements, diarrhee, hypersalivation.","en":"Nausea, vomiting, diarrhea, drooling."},"what_to_do":{"fr":"Surveillez. Consultez si symptomes persistent plus de 4h.","en":"Monitor. Consult vet if symptoms persist more than 4h."}},{"names":["rosier","rose","rosa","rosal","rose bush","rosa gallica","dog rose","miniature rose"],"toxicity":"warning","emergency":false,"summary":{"fr":"Les roses ne sont pas toxiques mais les epines peuvent blesser.","en":"Roses are not toxic but thorns can injure. Petals may cause mild nausea."},"symptoms":{"fr":"Legeres nausees, vomissements si grande quantite. Blessures par epines.","en":"Mild nausea, vomiting if large amount ingested. Thorn injuries."},"what_to_do":{"fr":"Surveillez. Consultez si symptomes digestifs persistants.","en":"Monitor. Consult vet if digestive symptoms persist."}},{"names":["lavande","lavender","lavanda","lavendel","lavandula","lavandula angustifolia","english lavender","french lavender"],"toxicity":"warning","emergency":false,"summary":{"fr":"La lavande contient des huiles essentielles legerement toxiques en grande quantite.","en":"Lavender contains essential oils slightly toxic to cats in large amounts."},"symptoms":{"fr":"Nausees legeres, vomissements si ingestion importante.","en":"Mild nausea, vomiting if large ingestion."},"what_to_do":{"fr":"Surveillance suffit dans la plupart des cas.","en":"Monitoring sufficient in most cases."}},{"names":["chrysantheme","chrysanthemum","crisantemo","chrysantheme fleur","garden mum","florist mum","dendranthema"],"toxicity":"warning","emergency":false,"summary":{"fr":"Le chrysantheme est moderement toxique. Contient des pyrethrines irritantes.","en":"Chrysanthemum is moderately toxic. Contains irritating pyrethrins."},"symptoms":{"fr":"Hypersalivation, vomissements, diarrhee, incoordination, irritation cutanee.","en":"Drooling, vomiting, diarrhea, incoordination, skin irritation."},"what_to_do":{"fr":"Consultez si symptomes neurologiques ou persistants.","en":"Consult vet if neurological or persistent symptoms."}},{"names":["hortensia","hydrangea","hortensie","ortensia","hydrangea macrophylla","bigleaf hydrangea"],"toxicity":"warning","emergency":false,"summary":{"fr":"L hortensia contient de faibles quantites de cyanure. Moderement toxique.","en":"Hydrangea contains small amounts of cyanide. Moderately toxic."},"symptoms":{"fr":"Vomissements, diarrhee, lethargie, depression.","en":"Vomiting, diarrhea, lethargy, depression."},"what_to_do":{"fr":"Consultez un veterinaire. Rarement grave mais surveillance recommandee.","en":"Consult vet. Rarely serious but monitoring recommended."}},{"names":["geranium","pelargonium","geranio","storchschnabel","geranium plante","zonal geranium","ivy geranium"],"toxicity":"warning","emergency":false,"summary":{"fr":"Le geranium est legerement toxique. Peut causer des troubles digestifs.","en":"Geranium is mildly toxic to cats. Can cause digestive issues."},"symptoms":{"fr":"Vomissements, depression, anorexie, legere depression.","en":"Vomiting, depression, anorexia, mild depression."},"what_to_do":{"fr":"Surveillez. Consultez si symptomes persistent plus de 24h.","en":"Monitor. Consult vet if symptoms persist more than 24h."}},{"names":["begonia","begonie","begonia semperflorens","wax begonia","tuberous begonia","begonia rex"],"toxicity":"warning","emergency":false,"summary":{"fr":"Le begonia est moderement toxique. Les racines tubereuses sont les plus dangereuses.","en":"Begonia is moderately toxic. Tuberous roots are the most dangerous part."},"symptoms":{"fr":"Irritation buccale, vomissements, hypersalivation.","en":"Oral irritation, vomiting, drooling."},"what_to_do":{"fr":"Consultez si ingestion des racines ou symptomes persistants.","en":"Consult vet if roots ingested or persistent symptoms."}},{"names":["eucalyptus","gommier","eucaliptos","eukalyptus","eucalyptus globulus","blue gum","lemon eucalyptus"],"toxicity":"warning","emergency":false,"summary":{"fr":"L eucalyptus et ses huiles essentielles sont moderement toxiques pour les chats.","en":"Eucalyptus and its essential oils are moderately toxic to cats."},"symptoms":{"fr":"Hypersalivation, vomissements, diarrhee, faiblesse, depression.","en":"Drooling, vomiting, diarrhea, weakness, depression."},"what_to_do":{"fr":"Consultez un veterinaire. Evitez les diffuseurs d huile essentielle d eucalyptus.","en":"Consult a vet. Avoid eucalyptus essential oil diffusers."}},{"names":["marguerite","daisy","margarita","margerite","bellis","leucanthemum","oxeye daisy","shasta daisy"],"toxicity":"warning","emergency":false,"summary":{"fr":"Les marguerites sont legerement irritantes. Moderement toxiques en grande quantite.","en":"Daisies are mildly irritating. Moderately toxic in large quantities."},"symptoms":{"fr":"Hypersalivation, vomissements, diarrhee legere si grande quantite.","en":"Drooling, vomiting, mild diarrhea if large quantity ingested."},"what_to_do":{"fr":"Surveillez. Consultez si symptomes persistants.","en":"Monitor. Consult vet if symptoms persist."}},{"names":["menthe poivree","peppermint","menta","pfefferminze","menta piperita","spearmint","mentha","mint plant","garden mint"],"toxicity":"warning","emergency":false,"summary":{"fr":"La menthe et ses huiles essentielles sont toxiques pour les chats.","en":"Mint and its essential oils are toxic to cats. Must be avoided."},"symptoms":{"fr":"Vomissements, diarrhee, faiblesse musculaire, tremblements si huile essentielle.","en":"Vomiting, diarrhea, muscle weakness, tremors if essential oil."},"what_to_do":{"fr":"Consultez un veterinaire. Evitez tout diffuseur de menthe.","en":"Consult vet. Avoid all mint diffusers."}},{"names":["romarin","rosemary","romero","rosmarin","rosmarino","alecrim","rosmarinus officinalis","garden rosemary"],"toxicity":"warning","emergency":false,"summary":{"fr":"Le romarin est legerement toxique en grande quantite. Huiles essentielles a eviter.","en":"Rosemary is mildly toxic in large amounts. Essential oils should be avoided."},"symptoms":{"fr":"Vomissements, diarrhee legere si grande ingestion.","en":"Vomiting, mild diarrhea if large ingestion."},"what_to_do":{"fr":"Surveillez. Evitez les huiles essentielles de romarin.","en":"Monitor. Avoid rosemary essential oils around cats."}},{"names":["poinsettia","etoile de noel","christmas star","stella di natale","weihnachtsstern","euphorbia pulcherrima"],"toxicity":"warning","emergency":false,"summary":{"fr":"Le poinsettia est moderement irritant mais rarement dangereux. Reputation toxique exageree.","en":"Poinsettia is moderately irritating but rarely dangerous. Toxic reputation is exaggerated."},"symptoms":{"fr":"Irritation buccale, hypersalivation, vomissements legers, irritation cutanee.","en":"Oral irritation, drooling, mild vomiting, skin irritation."},"what_to_do":{"fr":"Rincez la bouche. Surveillez. Consultez si symptomes persistent plus de 2h.","en":"Rinse mouth. Monitor. Consult vet if symptoms persist more than 2h."}},{"names":["primevere","primrose","primula","schlüsselblume","primula vulgaris","cowslip","primula obconica"],"toxicity":"warning","emergency":false,"summary":{"fr":"La primevere est legerement toxique. Peut provoquer des irritations cutanees.","en":"Primrose is mildly toxic. Can cause skin and digestive irritation."},"symptoms":{"fr":"Irritation cutanee, vomissements legers, hypersalivation.","en":"Skin irritation, mild vomiting, drooling."},"what_to_do":{"fr":"Lavez les zones exposees. Consultez si symptomes persistants.","en":"Wash exposed areas. Consult vet if persistent symptoms."}},{"names":["lilas","lilac","lila","flieder","lilla","syringa","syringa vulgaris","common lilac"],"toxicity":"warning","emergency":false,"summary":{"fr":"Le lilas est legerement toxique. Les fleurs peuvent causer des troubles digestifs.","en":"Lilac is mildly toxic to cats. Flowers can cause digestive issues."},"symptoms":{"fr":"Vomissements, diarrhee legere si grande quantite.","en":"Vomiting, mild diarrhea if large quantity ingested."},"what_to_do":{"fr":"Surveillez. Consultez si symptomes persistent.","en":"Monitor. Consult vet if symptoms persist."}},{"names":["camomille","chamomile","manzanilla","kamille","camomilla","matricaria","anthemis","german chamomile","roman chamomile"],"toxicity":"warning","emergency":false,"summary":{"fr":"La camomille est legerement toxique en grandes quantites ou en huile essentielle.","en":"Chamomile is mildly toxic in large amounts or as essential oil."},"symptoms":{"fr":"Vomissements, diarrhee, dermatite de contact.","en":"Vomiting, diarrhea, contact dermatitis."},"what_to_do":{"fr":"Surveillez. Evitez les huiles essentielles de camomille.","en":"Monitor. Avoid chamomile essential oils."}},{"names":["pivoine","peony","paeonia","pfingstrose","peonia","paeonia lactiflora","tree peony"],"toxicity":"warning","emergency":false,"summary":{"fr":"La pivoine est legerement a moderement toxique pour les chats.","en":"Peony is mildly to moderately toxic to cats."},"symptoms":{"fr":"Vomissements, diarrhee, depression.","en":"Vomiting, diarrhea, depression."},"what_to_do":{"fr":"Consultez si symptomes importants.","en":"Consult vet if significant symptoms."}},{"names":["coleus","coleus plante","solenostemon","painted nettle","flame nettle","coleus scutellarioides"],"toxicity":"warning","emergency":false,"summary":{"fr":"Le coleus est legerement toxique. Peut causer des irritations digestives.","en":"Coleus is mildly toxic. Can cause digestive irritation."},"symptoms":{"fr":"Vomissements, diarrhee, depression legere.","en":"Vomiting, diarrhea, mild depression."},"what_to_do":{"fr":"Surveillez. Consultez si symptomes persistent.","en":"Monitor. Consult vet if symptoms persist."}},{"names":["impatiente","impatiens","touch-me-not","busy lizzie","impatiens walleriana","sultana"],"toxicity":"warning","emergency":false,"summary":{"fr":"Les impatientes sont legerement toxiques pour les chats.","en":"Impatiens are mildly toxic to cats."},"symptoms":{"fr":"Legere irritation buccale, vomissements moderes.","en":"Mild oral irritation, moderate vomiting."},"what_to_do":{"fr":"Surveillez. Consultez si symptomes persistent.","en":"Monitor. Consult vet if symptoms persist."}},{"names":["sauge","sage","salvia","salbei","salvia officinalis","garden sage"],"toxicity":"warning","emergency":false,"summary":{"fr":"La sauge est legerement toxique en grande quantite ou en huile essentielle.","en":"Sage is mildly toxic in large amounts or as essential oil."},"symptoms":{"fr":"Vomissements legers, diarrhee si grande quantite.","en":"Mild vomiting, diarrhea if large amount."},"what_to_do":{"fr":"Surveillez. Evitez les huiles essentielles de sauge.","en":"Monitor. Avoid sage essential oils."}},{"names":["persil","parsley","perejil","petersilie","prezzemolo","petroselinum crispum","curly parsley"],"toxicity":"warning","emergency":false,"summary":{"fr":"Le persil est legerement toxique en grande quantite. Peut affecter les reins.","en":"Parsley is mildly toxic in large amounts. Can affect kidneys."},"symptoms":{"fr":"Vomissements, diarrhee si grande quantite.","en":"Vomiting, diarrhea in large amounts."},"what_to_do":{"fr":"Evitez de donner en grande quantite.","en":"Avoid giving large amounts."}},{"names":["origan","oregano","origano","origanum vulgare","common oregano","wild marjoram"],"toxicity":"warning","emergency":false,"summary":{"fr":"L origan est legerement toxique, surtout les huiles essentielles.","en":"Oregano is mildly toxic, especially essential oils."},"symptoms":{"fr":"Vomissements, diarrhee legere si grande quantite.","en":"Vomiting, mild diarrhea if large amount."},"what_to_do":{"fr":"Surveillez. Evitez les huiles essentielles.","en":"Monitor. Avoid essential oils."}},{"names":["dahlia","dahlia pinnata","garden dahlia","dinner plate dahlia","pompom dahlia"],"toxicity":"warning","emergency":false,"summary":{"fr":"Le dahlia est legerement toxique. Peut provoquer des irritations.","en":"Dahlia is mildly toxic. Can cause irritation."},"symptoms":{"fr":"Legere irritation cutanee, vomissements legers.","en":"Mild skin irritation, mild vomiting."},"what_to_do":{"fr":"Surveillez. Consultez si symptomes importants.","en":"Monitor. Consult if significant symptoms."}},{"names":["soucis","marigold","calendula","tagetes","calendula officinalis","pot marigold","french marigold"],"toxicity":"warning","emergency":false,"summary":{"fr":"Les soucis sont legerement irritants mais generalement sans danger grave.","en":"Marigolds are mildly irritating but generally not seriously dangerous."},"symptoms":{"fr":"Legere irritation buccale, vomissements legers si grande quantite.","en":"Mild oral irritation, mild vomiting if large quantity."},"what_to_do":{"fr":"Surveillez. Consultez si symptomes persistent.","en":"Monitor. Consult if symptoms persist."}},{"names":["tradescantia","spiderwort","wandering jew","tradescantia zebrina","inch plant","purple heart"],"toxicity":"warning","emergency":false,"summary":{"fr":"La tradescantia peut causer une irritation cutanee et legere irritation digestive.","en":"Tradescantia can cause skin irritation and mild digestive irritation."},"symptoms":{"fr":"Irritation cutanee, vomissements legers si ingestion importante.","en":"Skin irritation, mild vomiting if significant ingestion."},"what_to_do":{"fr":"Surveillez. Lavez si irritation cutanee.","en":"Monitor. Wash if skin irritation."}},{"names":["forsythia","golden bell","forsythia suspensa","forsythia intermedia"],"toxicity":"warning","emergency":false,"summary":{"fr":"Le forsythia est legerement toxique pour les chats.","en":"Forsythia is mildly toxic to cats."},"symptoms":{"fr":"Vomissements legers, diarrhee si grande quantite.","en":"Mild vomiting, diarrhea if large quantity ingested."},"what_to_do":{"fr":"Surveillez. Consultez si symptomes importants.","en":"Monitor. Consult if significant symptoms."}},{"names":["nymphea","water lily","nenufar","seerose","ninfea","nymphaea","nymphaea alba","white water lily"],"toxicity":"warning","emergency":false,"summary":{"fr":"Le nymphea est legerement toxique pour les chats.","en":"Water lily is mildly toxic to cats."},"symptoms":{"fr":"Vomissements, diarrhee legere si ingestion.","en":"Vomiting, mild diarrhea if ingestion."},"what_to_do":{"fr":"Surveillez. Consultez si symptomes importants.","en":"Monitor. Consult if significant symptoms."}},{"names":["mimosa","mimosa pudica","sensitive plant","humble plant","acacia dealbata"],"toxicity":"warning","emergency":false,"summary":{"fr":"Le mimosa peut etre legerement toxique pour les chats.","en":"Mimosa can be mildly toxic to cats."},"symptoms":{"fr":"Legere somnolence, vomissements moderes si ingestion importante.","en":"Mild drowsiness, moderate vomiting if significant ingestion."},"what_to_do":{"fr":"Surveillez. Consultez si symptomes persistent.","en":"Monitor. Consult if symptoms persist."}},{"names":["jasmin","jasmine","jazmin","gelsomino","jasmim","jasminum","jasminum officinale","common jasmine"],"toxicity":"warning","emergency":false,"summary":{"fr":"Le jasmin est legerement toxique. Attention au faux jasmin qui est tres toxique.","en":"Jasmine is mildly toxic. Beware of false jasmine which is very dangerous."},"symptoms":{"fr":"Vomissements legers, diarrhee moderee.","en":"Mild vomiting, moderate diarrhea."},"what_to_do":{"fr":"Surveillez. Consultez si symptomes importants.","en":"Monitor. Consult if significant symptoms."}},{"names":["bougainvillier","bougainvillea","buganvilla","bouganville","bougainvillea glabra"],"toxicity":"warning","emergency":false,"summary":{"fr":"Le bougainvillier peut causer des irritations legeres.","en":"Bougainvillea can cause mild irritation in cats."},"symptoms":{"fr":"Irritation buccale legere, vomissements moderes si grande quantite.","en":"Mild oral irritation, moderate vomiting if large quantity."},"what_to_do":{"fr":"Surveillez. Consultez si symptomes importants.","en":"Monitor. Consult if significant symptoms."}},{"names":["amarante","amaranth","amaranto","fuchsschwanz","amaranthus","love lies bleeding"],"toxicity":"warning","emergency":false,"summary":{"fr":"L amarante peut causer des troubles digestifs legers.","en":"Amaranth can cause mild digestive issues in cats."},"symptoms":{"fr":"Vomissements legers, diarrhee legere si grande quantite.","en":"Mild vomiting, mild diarrhea if large amount."},"what_to_do":{"fr":"Surveillez. Consultez si symptomes persistent.","en":"Monitor. Consult if symptoms persist."}},{"names":["viorne","viburnum","viburnum opulus","guelder rose","snowball bush","arrowwood"],"toxicity":"warning","emergency":false,"summary":{"fr":"La viorne est legerement toxique pour les chats.","en":"Viburnum is mildly toxic to cats."},"symptoms":{"fr":"Vomissements, diarrhee legere.","en":"Vomiting, mild diarrhea."},"what_to_do":{"fr":"Surveillez. Consultez si symptomes persistent.","en":"Monitor. Consult if symptoms persist."}},{"names":["pittosporum","pittosporum tobira","japanese pittosporum","tobira","mock orange"],"toxicity":"warning","emergency":false,"summary":{"fr":"Le pittosporum est legerement toxique pour les chats.","en":"Pittosporum is mildly toxic to cats."},"symptoms":{"fr":"Vomissements, diarrhee legere.","en":"Vomiting, mild diarrhea."},"what_to_do":{"fr":"Surveillez. Consultez si symptomes importants.","en":"Monitor. Consult if significant symptoms."}},{"names":["clivie","clivia","clivia miniata","natal lily","bush lily","kafir lily","fire lily"],"toxicity":"warning","emergency":false,"summary":{"fr":"Le clivia contient de la lycorine, moderement toxique.","en":"Clivia contains lycorine, moderately toxic to cats."},"symptoms":{"fr":"Vomissements, diarrhee, hypersalivation, tremblements.","en":"Vomiting, diarrhea, drooling, tremors."},"what_to_do":{"fr":"Consultez un veterinaire. Surveillez 24h.","en":"Consult a vet. Monitor for 24h."}},{"names":["muscari","grape hyacinth","nazareno","traubenhyazinthe","muscari armeniacum"],"toxicity":"warning","emergency":false,"summary":{"fr":"Le muscari est legerement toxique pour les chats.","en":"Grape hyacinth is mildly toxic to cats."},"symptoms":{"fr":"Vomissements legers, diarrhee, hypersalivation.","en":"Mild vomiting, diarrhea, drooling."},"what_to_do":{"fr":"Consultez si symptomes importants.","en":"Consult vet if significant symptoms."}},{"names":["crocosmia","montbretia","crocosmia x crocosmiiflora","falling stars","coppertips"],"toxicity":"warning","emergency":false,"summary":{"fr":"La crocosmia peut causer de legeres irritations.","en":"Crocosmia can cause mild irritation in cats."},"symptoms":{"fr":"Vomissements legers, diarrhee legere si grande quantite.","en":"Mild vomiting, mild diarrhea if large amount."},"what_to_do":{"fr":"Surveillez. Consultez si symptomes importants.","en":"Monitor. Consult if significant symptoms."}},{"names":["alstroemeria","alstroemere","peruvian lily","lily of the incas","princess lily"],"toxicity":"warning","emergency":false,"summary":{"fr":"L alstroemeria peut causer des irritations legeres.","en":"Alstroemeria can cause mild irritation in cats."},"symptoms":{"fr":"Legere irritation cutanee et digestive.","en":"Mild skin and digestive irritation."},"what_to_do":{"fr":"Surveillez. Consultez si symptomes importants.","en":"Monitor. Consult if significant symptoms."}},{"names":["gardenia","gardenia jasminoides","cape jasmine","gardenia augusta","common gardenia"],"toxicity":"warning","emergency":false,"summary":{"fr":"Le gardenia est moderement toxique pour les chats.","en":"Gardenia is moderately toxic to cats."},"symptoms":{"fr":"Vomissements, diarrhee, urticaire.","en":"Vomiting, diarrhea, hives."},"what_to_do":{"fr":"Consultez si symptomes importants.","en":"Consult vet if significant symptoms."}},{"names":["oeillet","carnation","clavel","nelke","garofano","dianthus","dianthus caryophyllus","garden carnation"],"toxicity":"warning","emergency":false,"summary":{"fr":"L oeillet peut causer de legeres irritations.","en":"Carnation can cause mild irritation in cats."},"symptoms":{"fr":"Legere irritation digestive, vomissements legers.","en":"Mild digestive irritation, mild vomiting."},"what_to_do":{"fr":"Surveillez. Consultez si symptomes persistent.","en":"Monitor. Consult if symptoms persist."}},{"names":["passiflore","passionflower","passiflora","fleur de la passion"],"toxicity":"warning","emergency":false,"summary":{"fr":"La passiflore peut etre legerement toxique en grande quantite.","en":"Passionflower can be mildly toxic in large amounts."},"symptoms":{"fr":"Vomissements legers, sedation possible.","en":"Mild vomiting, possible sedation."},"what_to_do":{"fr":"Surveillez. Consultez si symptomes importants.","en":"Monitor. Consult if significant symptoms."}},{"names":["achillee","yarrow","milenrama","schafgarbe","achillea millefolium","common yarrow"],"toxicity":"warning","emergency":false,"summary":{"fr":"L achillee peut causer des troubles digestifs legers.","en":"Yarrow can cause mild digestive issues in cats."},"symptoms":{"fr":"Vomissements, diarrhee legere, photosensibilisation possible.","en":"Vomiting, mild diarrhea, possible photosensitization."},"what_to_do":{"fr":"Surveillez. Consultez si symptomes importants.","en":"Monitor. Consult if significant symptoms."}},{"names":["pin","pine","pino","kiefer","pinheiro","pinus","scots pine","pin sylvestre","pine needles","sapin de noel","christmas tree"],"toxicity":"warning","emergency":false,"summary":{"fr":"Le pin/sapin peut causer des irritations digestives. L eau du vase du sapin de Noel est dangereuse.","en":"Pine/fir can cause digestive irritation. Christmas tree water is dangerous."},"symptoms":{"fr":"Vomissements, diarrhee legere. Risque renal avec l eau du vase.","en":"Vomiting, mild diarrhea. Kidney risk with vase water."},"what_to_do":{"fr":"Surveillez. Couvrez l eau du vase de sapin.","en":"Monitor. Cover Christmas tree water."}},{"names":["cedre","cedar","cedro","zeder","cedrus","cedrus libani","atlas cedar"],"toxicity":"warning","emergency":false,"summary":{"fr":"Le cedre peut irriter legerement les chats, surtout les huiles essentielles.","en":"Cedar can mildly irritate cats, especially essential oils."},"symptoms":{"fr":"Legere irritation respiratoire, vomissements si grande quantite.","en":"Mild respiratory irritation, vomiting if large amounts ingested."},"what_to_do":{"fr":"Surveillez. Evitez les huiles essentielles de cedre.","en":"Monitor. Avoid cedar essential oils."}},{"names":["genevrier","juniper","enebro","wacholder","ginepro","juniperus","juniperus communis"],"toxicity":"warning","emergency":false,"summary":{"fr":"Le genevrier est legerement toxique, surtout les baies.","en":"Juniper is mildly toxic, especially berries."},"symptoms":{"fr":"Vomissements, diarrhee, irritation renale possible si grande quantite.","en":"Vomiting, diarrhea, possible kidney irritation if large amount."},"what_to_do":{"fr":"Surveillez. Evitez les baies.","en":"Monitor. Avoid berries."}},{"names":["thuya","thuja","arborvitae","thuja occidentalis","eastern arborvitae"],"toxicity":"warning","emergency":false,"summary":{"fr":"Le thuya est legerement toxique pour les chats.","en":"Thuja is mildly toxic to cats."},"symptoms":{"fr":"Vomissements legers, irritation digestive.","en":"Mild vomiting, digestive irritation."},"what_to_do":{"fr":"Surveillez. Consultez si symptomes importants.","en":"Monitor. Consult if significant symptoms."}},{"names":["cypres","cypress","cipres","zypresse","cipresso","cupressus","cupressus sempervirens","italian cypress"],"toxicity":"warning","emergency":false,"summary":{"fr":"Le cypres peut causer de legeres irritations.","en":"Cypress can cause mild irritation in cats."},"symptoms":{"fr":"Legere irritation digestive si ingestion.","en":"Mild digestive irritation if ingestion."},"what_to_do":{"fr":"Surveillez. Consultez si symptomes importants.","en":"Monitor. Consult if significant symptoms."}},{"names":["erable","maple","arce","ahorn","acero","acer","acer palmatum","japanese maple","norway maple"],"toxicity":"warning","emergency":false,"summary":{"fr":"Certains erables peuvent etre legerement toxiques. L erable negundo est plus dangereux.","en":"Some maples can be mildly toxic. Box elder maple is more dangerous."},"symptoms":{"fr":"Vomissements legers, faiblesse possible.","en":"Mild vomiting, possible weakness."},"what_to_do":{"fr":"Surveillez. Consultez si symptomes importants.","en":"Monitor. Consult if significant symptoms."}},{"names":["sorbier","rowan","mountain ash","sorbus","sorbus aucuparia","european mountain ash"],"toxicity":"warning","emergency":false,"summary":{"fr":"Le sorbier peut causer de legeres nausees si baies crues ingerees.","en":"Rowan can cause mild nausea if raw berries eaten."},"symptoms":{"fr":"Legeres nausees, vomissements si baies crues ingerees.","en":"Mild nausea, vomiting if raw berries ingested."},"what_to_do":{"fr":"Surveillez. Consultez si symptomes persistent.","en":"Monitor. Consult if symptoms persist."}},{"names":["hysope","hyssop","hyssopus officinalis","anise hyssop"],"toxicity":"warning","emergency":false,"summary":{"fr":"L hysope peut etre toxique en grande quantite.","en":"Hyssop can be toxic in large amounts."},"symptoms":{"fr":"Vomissements, convulsions possibles si grande quantite.","en":"Vomiting, possible seizures if large amount."},"what_to_do":{"fr":"Consultez si ingestion importante.","en":"Consult vet if significant ingestion."}},{"names":["pyracantha","firethorn","buisson ardent","pyracantha coccinea","scarlet firethorn"],"toxicity":"warning","emergency":false,"summary":{"fr":"La pyracantha est legerement toxique, surtout les baies.","en":"Pyracantha is mildly toxic, especially berries."},"symptoms":{"fr":"Vomissements, diarrhee si baies ingerees.","en":"Vomiting, diarrhea if berries ingested."},"what_to_do":{"fr":"Surveillez. Consultez si symptomes importants.","en":"Monitor. Consult if significant symptoms."}},{"names":["giroflée","wallflower","aleli","goldlack","erysimum","cheiranthus","erysimum cheiri"],"toxicity":"warning","emergency":false,"summary":{"fr":"La giroflée peut causer de legeres irritations.","en":"Wallflower can cause mild irritation in cats."},"symptoms":{"fr":"Irritation digestive legere.","en":"Mild digestive irritation."},"what_to_do":{"fr":"Surveillez. Consultez si symptomes importants.","en":"Monitor. Consult if significant symptoms."}},{"names":["herbe a chat","catnip","cataire","nepeta cataria","menthe des chats","hierba gatera","katzenminze","catnep"],"toxicity":"safe","emergency":false,"summary":{"fr":"L herbe a chat est totalement sure et benefique pour les chats.","en":"Catnip is completely safe and beneficial for cats."},"symptoms":{"fr":"Aucun symptome nefaste. Comportement joueur, roulement.","en":"No harmful symptoms. Playful behavior, rolling."},"what_to_do":{"fr":"Aucune action necessaire. Plante inoffensive.","en":"No action needed. Harmless plant."}},{"names":["valeriane","valerian","valeriana","baldrian","valeriana officinalis","common valerian"],"toxicity":"safe","emergency":false,"summary":{"fr":"La valeriane est sûre pour les chats. Effet similaire a l herbe a chat.","en":"Valerian is safe for cats. Similar effect to catnip."},"symptoms":{"fr":"Aucun symptome nefaste.","en":"No harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["orchidee","orchid","orquidea","orchidee fleur","orchidea","phalaenopsis","cattleya","dendrobium","cymbidium","moth orchid"],"toxicity":"safe","emergency":false,"summary":{"fr":"Les orchidees sont sans danger pour les chats.","en":"Orchids are safe for cats. Safe decorative plant."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["fougere de boston","boston fern","nephrolepis","nephrolepis exaltata","sword fern","macho fern"],"toxicity":"safe","emergency":false,"summary":{"fr":"La fougere de Boston est sans danger pour les chats. Recommandee pour les foyers avec chats.","en":"Boston fern is safe for cats. One of the best plants to have with cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["herbe a gazon","cat grass","ble germe","avoine","orge","wheat grass","herbe du chat","oat grass","dactylis"],"toxicity":"safe","emergency":false,"summary":{"fr":"L herbe a chat est totalement sure et recommandee.","en":"Cat grass is completely safe and recommended for cats."},"symptoms":{"fr":"Aucun symptome nefaste. Aide a la digestion.","en":"No harmful symptoms. Helps digestion."},"what_to_do":{"fr":"Aucune action necessaire. Plante benefique.","en":"No action needed. Beneficial plant."}},{"names":["bromeliacee","bromeliad","bromelia","bromelie","guzmania","vriesea","tillandsia","aechmea","neoregelia","cryptanthus","earth star"],"toxicity":"safe","emergency":false,"summary":{"fr":"Les bromeliacees sont sans danger pour les chats.","en":"Bromeliads are safe for cats. Safe tropical plants."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["areca","palmier areca","dypsis lutescens","palmier bambou","butterfly palm","areca palm","golden cane palm"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le palmier areca est sans danger pour les chats. Excellent purificateur d air.","en":"Areca palm is safe for cats. Excellent air purifier."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["palmier kentia","kentia palm","howea forsteriana","paradise palm","sentry palm"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le palmier kentia est totalement sans danger pour les chats.","en":"Kentia palm is completely safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["palmier nain","parlor palm","chamaedorea","chamaedorea elegans","neanthe bella palm","good luck palm","bamboo palm"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le palmier nain Chamaedorea est sans danger pour les chats.","en":"Parlor palm is safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["dionee","venus flytrap","dionaea muscipula","attrape-mouche","plante carnivore","venus fly trap"],"toxicity":"safe","emergency":false,"summary":{"fr":"La dionee attrape-mouche est sans danger pour les chats.","en":"Venus flytrap is safe for cats. Harmless carnivorous plant."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["bambou","bamboo","bambu","bambus","phyllostachys","fargesia","bambou geant","moso bamboo","arrow bamboo"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le vrai bambou est sans danger pour les chats. A distinguer du lucky bamboo (Dracaena) qui est toxique.","en":"True bamboo is safe for cats. Distinguish from lucky bamboo (Dracaena) which IS toxic."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire. Attention le lucky bambou est LUI toxique.","en":"No action needed. Note: lucky bamboo IS toxic."}},{"names":["thym","thyme","tomillo","thymian","timo","tomilho","thymus vulgaris","garden thyme","lemon thyme"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le thym est sûr pour les chats en petites quantites.","en":"Thyme is safe for cats in small amounts."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["basilic","basil","albahaca","basilikum","basilico","manjericao","ocimum basilicum","sweet basil","thai basil"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le basilic est sûr pour les chats.","en":"Basil is safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["coriandre","cilantro","coriander","koriander","coriandolo","coentro","coriandrum sativum"],"toxicity":"safe","emergency":false,"summary":{"fr":"La coriandre est sans danger pour les chats.","en":"Coriander is safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["gerbera","gerbera daisy","transvaal daisy","barberton daisy","gerbera jamesonii","african daisy"],"toxicity":"safe","emergency":false,"summary":{"fr":"La gerbera est sans danger pour les chats.","en":"Gerbera is safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["tournesol","sunflower","girasol","sonnenblume","girasole","girassol","helianthus annuus"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le tournesol est sans danger pour les chats.","en":"Sunflower is safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["zinnia","zinnia elegans","common zinnia","garden zinnia","mexican zinnia"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le zinnia est sans danger pour les chats.","en":"Zinnia is safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["petunia","petunia hybrida","common petunia","wave petunia","calibrachoa","million bells"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le petunia est sans danger pour les chats.","en":"Petunia is safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["muflier","snapdragon","gueule de loup","antirrhinum","antirrhinum majus","dragon flower"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le muflier est sans danger pour les chats.","en":"Snapdragon is safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["chlorophytum","spider plant","plante araignee","grunlilie","chlorophytum comosum","ribbon plant","airplane plant"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le chlorophytum est sans danger. Peut avoir un leger effet hallucinogene inoffensif.","en":"Spider plant is safe for cats. May have a mild harmless hallucinogenic effect."},"symptoms":{"fr":"Peut provoquer une legere sedation ou comportement joueur. Sans danger.","en":"May cause mild sedation or playful behavior. Not dangerous."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["calathea","prayer plant calathea","peacock plant","calathea ornata","calathea zebrina","calathea makoyana"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le calathea est totalement sans danger pour les chats.","en":"Calathea is completely safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["maranta","maranta leuconeura","prayer plant maranta","rabbit tracks","red prayer plant"],"toxicity":"safe","emergency":false,"summary":{"fr":"La maranta est sans danger pour les chats.","en":"Maranta is safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["violette africaine","african violet","saintpaulia","saintpaulia ionantha","usambara violet"],"toxicity":"safe","emergency":false,"summary":{"fr":"La violette africaine est sans danger pour les chats.","en":"African violet is safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["pilea","pilea peperomioides","chinese money plant","ufo plant","missionary plant","pancake plant","coin plant"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le pilea est sans danger pour les chats.","en":"Pilea is safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["peperomia","radiator plant","baby rubber plant","peperomia obtusifolia","peperomia caperata","watermelon peperomia"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le peperomia est sans danger pour les chats.","en":"Peperomia is safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["haworthia","haworthia fasciata","zebra plant haworthia","cushion aloe","haworthiopsis"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le haworthia est sans danger pour les chats, contrairement a l aloe vera.","en":"Haworthia is safe for cats, unlike aloe vera."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["echeveria","echeveria elegans","hen and chicks echeveria","echeveria glauca"],"toxicity":"safe","emergency":false,"summary":{"fr":"L echeveria est sans danger pour les chats.","en":"Echeveria is safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["aeonium","aeonium arboreum","pinwheel aeonium","tree houseleek","aeonium haworthii"],"toxicity":"safe","emergency":false,"summary":{"fr":"L aeonium est sans danger pour les chats.","en":"Aeonium is safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["sempervivum","joubarbe","hen and chicks","houseleek","sempervivum tectorum","liveforever"],"toxicity":"safe","emergency":false,"summary":{"fr":"La joubarbe est sans danger pour les chats.","en":"Houseleek is safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["cactus de noel","christmas cactus","schlumbergera","thanksgiving cactus","schlumbergera truncata","schlumbergera bridgesii"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le cactus de Noel est sans danger pour les chats.","en":"Christmas cactus is safe for cats."},"symptoms":{"fr":"Peut causer de legeres nausees si ingere en grande quantite.","en":"May cause mild nausea if ingested in large quantity."},"what_to_do":{"fr":"Aucune action urgente.","en":"No urgent action."}},{"names":["hoya","hoya carnosa","wax plant","porcelain flower","honey plant","hoya kerrii","sweetheart hoya"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le hoya est sans danger pour les chats.","en":"Hoya is safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["fittonia","fittonia albivenis","nerve plant","mosaic plant","painted net leaf"],"toxicity":"safe","emergency":false,"summary":{"fr":"La fittonia est sans danger pour les chats.","en":"Fittonia is safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["tillandsia","air plant","tillandsia usneoides","spanish moss","sky plant","ball moss"],"toxicity":"safe","emergency":false,"summary":{"fr":"Les tillandsias sont sans danger pour les chats.","en":"Tillandsias are safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["pensee","pansy","viola","stiefmutterchen","viola tricolor","viola wittrockiana","garden pansy"],"toxicity":"safe","emergency":false,"summary":{"fr":"Les pensees sont sans danger pour les chats.","en":"Pansies are safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["capucine","nasturtium","tropaeolum","kapuzinerkresse","nasturzio","tropaeolum majus"],"toxicity":"safe","emergency":false,"summary":{"fr":"La capucine est sans danger pour les chats. Fleur comestible sure.","en":"Nasturtium is safe for cats. Safe edible flower."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["celosie","celosia","cockscomb","celosia cristata","feathered amaranth","plumed celosia"],"toxicity":"safe","emergency":false,"summary":{"fr":"La celosie est sans danger pour les chats.","en":"Celosia is safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["echinacea","echinacee","purple coneflower","echinacea purpurea","eastern purple coneflower"],"toxicity":"safe","emergency":false,"summary":{"fr":"L echinacee est sans danger pour les chats.","en":"Echinacea is safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["rudbeckia","black-eyed susan","rudbeckia hirta","orange coneflower","gloriosa daisy"],"toxicity":"safe","emergency":false,"summary":{"fr":"La rudbeckia est sans danger connu pour les chats.","en":"Black-eyed Susan has no known danger for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["scabieuse","scabiosa","scabious","knautia","pincushion flower","scabiosa atropurpurea"],"toxicity":"safe","emergency":false,"summary":{"fr":"La scabieuse est sans danger connu pour les chats.","en":"Scabiosa has no known danger for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["astilbe","false spirea","feather flower","astilbe japonica","astilbe x arendsii"],"toxicity":"safe","emergency":false,"summary":{"fr":"L astilbe est sans danger connu pour les chats.","en":"Astilbe has no known danger for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["phlox","phlox paniculata","garden phlox","perennial phlox","fall phlox"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le phlox est sans danger connu pour les chats.","en":"Phlox has no known danger for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["alchemille","alchemilla","lady s mantle","alchemilla mollis","pied de lion"],"toxicity":"safe","emergency":false,"summary":{"fr":"L alchemille est sans danger connu pour les chats.","en":"Lady s mantle has no known danger for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["spiree","spirea","spierstrauch","spiraea","bridal wreath","spiraea japonica"],"toxicity":"safe","emergency":false,"summary":{"fr":"La spiree est sans danger connu pour les chats.","en":"Spirea has no known danger for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["camelia","camellia","camellia japonica","japanese camellia"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le camelia est generalement sans danger pour les chats.","en":"Camellia is generally safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["magnolia","magnolia grandiflora","southern magnolia","star magnolia","magnolia stellata","saucer magnolia"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le magnolia est sans danger connu pour les chats.","en":"Magnolia has no known danger for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["canna","canna lily","canna indica","canna edulis","indian shot","achira"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le canna est sans danger pour les chats.","en":"Canna is safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["aneth","dill","eneldo","dill weed","anethum graveolens","dill plant"],"toxicity":"safe","emergency":false,"summary":{"fr":"L aneth est sans danger pour les chats.","en":"Dill is safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["estragon","tarragon","estragon herb","artemisia dracunculus","french tarragon"],"toxicity":"safe","emergency":false,"summary":{"fr":"L estragon est sans danger pour les chats en petites quantites.","en":"Tarragon is safe for cats in small amounts."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["framboisier","raspberry","frambueso","himbeere","lampone","rubus idaeus","red raspberry"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le framboisier est sans danger pour les chats.","en":"Raspberry bush is safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["fraisier","strawberry","fresa","erdbeere","fragola","fragaria","fragaria ananassa"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le fraisier est sans danger pour les chats.","en":"Strawberry plant is safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["myrtillier","blueberry","mirtillo","heidelbeere","vaccinium","vaccinium corymbosum","highbush blueberry"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le myrtillier est sans danger pour les chats.","en":"Blueberry plant is safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["groseillier","currant","ribes","johannisbeere","ribes nigrum","black currant","red currant","gooseberry"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le groseillier est generalement sans danger pour les chats.","en":"Currant bushes are generally safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["bleuet","cornflower","aciano","kornblume","fiordaliso","centaurea","centaurea cyanus"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le bleuet est sans danger connu pour les chats.","en":"Cornflower has no known danger for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["weigela","weigelia","weigela florida","cardinal shrub"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le weigela est sans danger connu pour les chats.","en":"Weigela has no known danger for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["buddleia","butterfly bush","buddleja","arbre aux papillons","buddleja davidii","summer lilac"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le buddleia est sans danger connu pour les chats.","en":"Butterfly bush has no known danger for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["cornouiller","cornus","dogwood","cornus florida","flowering dogwood","cornus kousa"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le cornouiller est generalement sans danger pour les chats.","en":"Dogwood is generally safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["noisetier","corylus","hazel","avellano","haselstrauch","nocciolo","corylus avellana"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le noisetier est sans danger pour les chats.","en":"Hazel is safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["bouleau","betula","birch","abedul","birke","betulla","betula pendula","silver birch"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le bouleau est sans danger connu pour les chats.","en":"Birch has no known danger for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["tilleul","linden","lime tree","tilo","linde","tiglio","tilia cordata","small-leaved lime"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le tilleul est sans danger connu pour les chats.","en":"Linden tree has no known danger for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["fougere corne de cerf","staghorn fern","elkhorn fern","platycerium","platycerium bifurcatum"],"toxicity":"safe","emergency":false,"summary":{"fr":"La fougere corne de cerf est sans danger pour les chats.","en":"Staghorn fern is safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["asplenium","bird s nest fern","fougere nid d oiseau","asplenium nidus","japanese bird nest fern"],"toxicity":"safe","emergency":false,"summary":{"fr":"L asplenium nid d oiseau est sans danger pour les chats.","en":"Bird s nest fern is safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["capillaire","maidenhair fern","adiantum","adiantum capillus-veneris","adiantum raddianum","venus hair fern"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le capillaire (fougere maidenhair) est sans danger pour les chats.","en":"Maidenhair fern is safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["polystichum","holly fern","polystichum munitum","soft shield fern"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le polystichum est sans danger connu pour les chats.","en":"Holly fern has no known danger for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["gazon","lawn grass","grass","pelouse","graminee","herbe verte","bermuda grass","cynodon"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le gazon ordinaire est sans danger pour les chats.","en":"Regular lawn grass is safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste. Les vomissements apres ingestion d herbe sont normaux.","en":"No harmful symptoms. Vomiting after eating grass is normal and beneficial."},"what_to_do":{"fr":"Aucune action necessaire. C est un comportement naturel.","en":"No action needed. This is a natural and healthy behavior."}},{"names":["trefle","clover","trebol","klee","trifoglio","trevo","trifolium","trifolium repens","white clover","red clover"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le trefle est generalement sans danger pour les chats.","en":"Clover is generally safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["luzerne","alfalfa","medicago","lucerne","medicago sativa"],"toxicity":"safe","emergency":false,"summary":{"fr":"La luzerne est sans danger pour les chats.","en":"Alfalfa is safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["bourrache","borage","borraja","borretsch","borragine","borago officinalis","star flower"],"toxicity":"safe","emergency":false,"summary":{"fr":"La bourrache est sans danger connu pour les chats.","en":"Borage has no known danger for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["citronnelle","lemon balm","melissa","melissa officinalis","bee balm melissa","sweet balm"],"toxicity":"safe","emergency":false,"summary":{"fr":"La melisse citronnelle est generalement sans danger pour les chats.","en":"Lemon balm is generally safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste significatif connu.","en":"No significant known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["lin","flax","lino","lein","linum","linum usitatissimum","common flax"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le lin est generalement sans danger pour les chats.","en":"Flax is generally safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu en quantite normale.","en":"No known harmful symptoms in normal amounts."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["jacinthe d eau","water hyacinth","eichhornia","eichhornia crassipes"],"toxicity":"safe","emergency":false,"summary":{"fr":"La jacinthe d eau est sans danger connu pour les chats.","en":"Water hyacinth has no known danger for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["cactus raquette","prickly pear","opuntia","figuier de barbarie","opuntia ficus-indica","nopal"],"toxicity":"safe","emergency":false,"summary":{"fr":"L opuntia n est pas toxique mais les epines et glochides peuvent blesser les chats.","en":"Prickly pear is not toxic but spines and glochids can injure cats."},"symptoms":{"fr":"Blessures cutanees, irritation oculaire par les glochides.","en":"Skin injuries, eye irritation from glochids."},"what_to_do":{"fr":"Retirez delicatement les epines. Lavez.","en":"Gently remove spines. Wash."}},{"names":["festuca","fescue","fetuque","festuca glauca","blue fescue","grey fescue"],"toxicity":"safe","emergency":false,"summary":{"fr":"La fetuque est sans danger pour les chats.","en":"Fescue is safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["miscanthus","eulalia grass","maiden grass","miscanthus sinensis","japanese silver grass"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le miscanthus est sans danger connu pour les chats.","en":"Miscanthus grass has no known danger for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["pennisetum","fountain grass","herbe fontaine","pennisetum setaceum","red fountain grass"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le pennisetum est sans danger pour les chats.","en":"Fountain grass is safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["alyssum","sweet alyssum","lobularia","lobularia maritima","alyssum maritime"],"toxicity":"safe","emergency":false,"summary":{"fr":"L alyssum est sans danger connu pour les chats.","en":"Sweet alyssum has no known danger for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["limonium","statice","sea lavender","limonium sinuatum","caspia","marsh rosemary"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le limonium est sans danger connu pour les chats.","en":"Limonium has no known danger for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["frene","ash tree","fresno","esche","frassino","fraxinus","fraxinus excelsior","common ash"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le frene est sans danger connu pour les chats.","en":"Common ash tree has no known danger for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["lipstick plant","aeschynanthus","aeschynanthus radicans","basket vine"],"toxicity":"safe","emergency":false,"summary":{"fr":"La plante rouge a levres est sans danger pour les chats.","en":"Lipstick plant is safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["episcia","episcia cupreata","flame violet","episcia reptans"],"toxicity":"safe","emergency":false,"summary":{"fr":"L episcia est sans danger pour les chats.","en":"Episcia is safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["streptocarpus","cape primrose","streptocarpus saxorum","false african violet"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le streptocarpus est sans danger connu pour les chats.","en":"Streptocarpus has no known danger for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["impatiente nouvelle guinee","new guinea impatiens","impatiens hawkeri","sun impatiens"],"toxicity":"safe","emergency":false,"summary":{"fr":"L impatiente de Nouvelle-Guinee est sans danger pour les chats.","en":"New Guinea impatiens is safe for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["deutzia","deutzia scabra","slender deutzia","deutzia gracilis"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le deutzia est sans danger connu pour les chats.","en":"Deutzia has no known danger for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["kerria","kerria japonica","japanese rose shrub","jew mallow"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le kerria est sans danger connu pour les chats.","en":"Kerria has no known danger for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["abelia","abelia grandiflora","glossy abelia"],"toxicity":"safe","emergency":false,"summary":{"fr":"L abelia est sans danger connu pour les chats.","en":"Abelia has no known danger for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["gazania","treasure flower","gazania rigens","sun daisy"],"toxicity":"safe","emergency":false,"summary":{"fr":"La gazanie est sans danger connu pour les chats.","en":"Gazania has no known danger for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["penstemon","beard tongue","penstemon digitalis","beardtongue"],"toxicity":"safe","emergency":false,"summary":{"fr":"Le penstemon est sans danger connu pour les chats.","en":"Penstemon has no known danger for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}},{"names":["lunaria","honesty plant","lunaria annua","moneywort","silver dollar plant"],"toxicity":"safe","emergency":false,"summary":{"fr":"La lunaire est sans danger connu pour les chats.","en":"Honesty plant has no known danger for cats."},"symptoms":{"fr":"Aucun symptome nefaste connu.","en":"No known harmful symptoms."},"what_to_do":{"fr":"Aucune action necessaire.","en":"No action needed."}}];
+
+function _norm(s) {
+  return String(s).toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g,'')
+    .replace(/[^a-z0-9 ]/g,' ').replace(/\s+/g,' ').trim();
+}
+
+function searchPlantDB(query) {
+  if (!query) return null;
+  const q = _norm(query);
+  const words = q.split(' ').filter(w => w.length > 2);
+  let best = null, bestScore = 0;
+  for (const plant of PLANT_DB) {
+    let score = 0;
+    for (const name of plant.names) {
+      const n = _norm(name);
+      if (n === q)                        { score = 100; break; }
+      if (n.startsWith(q) || q.startsWith(n)) { score = Math.max(score, 85); }
+      if (n.includes(q) || q.includes(n)) { score = Math.max(score, 75); }
+      for (const w of words) {
+        if (n.includes(w)) score = Math.max(score, 45 + w.length * 3);
+      }
+    }
+    if (score > bestScore) { bestScore = score; best = plant; }
+  }
+  return bestScore >= 45 ? best : null;
+}
+
+function dbToResult(plant, lang) {
+  const l = ['fr','en','es','de','it','pt','eu'].includes(lang) ? lang : 'en';
+  const sl = ['fr','en'].includes(l) ? l : 'fr';
+  const displayName = plant.names[0].split(' ').map(w=>w.charAt(0).toUpperCase()+w.slice(1)).join(' ');
+  return {
+    plant_name: displayName,
+    toxicity:   plant.toxicity,
+    summary:    plant.summary[sl]   || plant.summary.fr,
+    symptoms:   plant.symptoms[sl]  || plant.symptoms.fr,
+    what_to_do: plant.what_to_do[sl]|| plant.what_to_do.fr,
+    emergency:  plant.emergency,
+    fromDB:     true
+  };
+}
+
 </script>
 </body>
 </html>
+
