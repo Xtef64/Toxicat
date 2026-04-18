@@ -1013,23 +1013,12 @@ async function doAnalyze() {
     // ── STEP 2: Photo → Pl@ntNet identification (gratuit) ──
     if (imgBase64) {
       try {
-        // Appel direct PlantNet — multipart raw (évite DataCloneError du SW)
-        const pnBoundary = '----ToxiCatBound' + Date.now();
-        const enc = new TextEncoder();
-        const imgBytes = new Uint8Array(atob(imgBase64).split('').map(c => c.charCodeAt(0)));
-        const p1 = enc.encode('--' + pnBoundary + '\r\nContent-Disposition: form-data; name="organs"\r\n\r\nauto\r\n');
-        const p2h = enc.encode('--' + pnBoundary + '\r\nContent-Disposition: form-data; name="images"; filename="plant.jpg"\r\nContent-Type: ' + (imgMime || 'image/jpeg') + '\r\n\r\n');
-        const p3 = enc.encode('\r\n--' + pnBoundary + '--\r\n');
-        const pnBody = new Uint8Array(p1.length + p2h.length + imgBytes.length + p3.length);
-        pnBody.set(p1, 0);
-        pnBody.set(p2h, p1.length);
-        pnBody.set(imgBytes, p1.length + p2h.length);
-        pnBody.set(p3, p1.length + p2h.length + imgBytes.length);
-
-        const plantnetResp = await fetch(
-          'https://my-api.plantnet.org/v2/identify/all?lang=fr&nb-results=5&api-key=2b106tJxkhFKun8WbpsU2BVjfO',
-          { method: 'POST', headers: { 'Content-Type': 'multipart/form-data; boundary=' + pnBoundary }, body: pnBody }
-        );
+        // Appel via proxy Vercel (gère les 3 variantes d'Origin)
+        const plantnetResp = await fetch('/api/plantnet', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ imageBase64: imgBase64, mimeType: imgMime || 'image/jpeg' })
+        });
 
         // Afficher l'erreur réelle si le proxy échoue
         if (!plantnetResp.ok) {
@@ -1393,6 +1382,7 @@ function dbToResult(plant, lang) {
 </script>
 </body>
 </html>
+
 
 
 
