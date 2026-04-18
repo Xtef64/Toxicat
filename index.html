@@ -1013,12 +1013,20 @@ async function doAnalyze() {
     // ── STEP 2: Photo → Pl@ntNet identification (gratuit) ──
     if (imgBase64) {
       try {
-        // Envoie base64 en JSON au proxy Vercel
-        const plantnetResp = await fetch('/api/plantnet', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ imageBase64: imgBase64, mimeType: imgMime || 'image/jpeg' })
-        });
+        // Appel DIRECT navigateur → PlantNet (CORS avec domaine autorisé)
+        const byteStr2 = atob(imgBase64);
+        const ab2 = new ArrayBuffer(byteStr2.length);
+        const ia2 = new Uint8Array(ab2);
+        for (let i = 0; i < byteStr2.length; i++) ia2[i] = byteStr2.charCodeAt(i);
+        const blob2 = new Blob([ab2], { type: imgMime || 'image/jpeg' });
+        const form2 = new FormData();
+        form2.append('organs', 'auto');
+        form2.append('images', blob2, 'plant.jpg');
+
+        const plantnetResp = await fetch(
+          'https://my-api.plantnet.org/v2/identify/all?lang=fr&nb-results=5&api-key=2b106tJxkhFKun8WbpsU2BVjfO',
+          { method: 'POST', body: form2 }
+        );
 
         // Afficher l'erreur réelle si le proxy échoue
         if (!plantnetResp.ok) {
