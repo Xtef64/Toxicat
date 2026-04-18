@@ -1013,7 +1013,7 @@ async function doAnalyze() {
     // ── STEP 2: Photo → Pl@ntNet identification (gratuit) ──
     if (imgBase64) {
       try {
-        // Appel direct navigateur → Pl@ntNet (CORS autorisé via domain whitelist)
+        // Appel via proxy Vercel (server-to-server, pas de CORS)
         const byteStr = atob(imgBase64);
         const ab = new ArrayBuffer(byteStr.length);
         const ia = new Uint8Array(ab);
@@ -1023,10 +1023,10 @@ async function doAnalyze() {
         form.append('organs', 'auto');
         form.append('images', blob, 'plant.jpg');
 
-        const plantnetResp = await fetch(
-          'https://my-api.plantnet.org/v2/identify/all?lang=fr&nb-results=5&api-key=2b106tJxkhFKun8WbpsU2BVjfO',
-          { method: 'POST', body: form }
-        );
+        const plantnetResp = await fetch('/api/plantnet', {
+          method: 'POST',
+          body: form
+        });
 
         if (plantnetResp.ok) {
           const plantnetData = await plantnetResp.json();
@@ -1372,5 +1372,6 @@ function dbToResult(plant, lang) {
 </script>
 </body>
 </html>
+
 
 
