@@ -2,10 +2,12 @@
   "version": 2,
   "builds": [
     { "src": "index.html", "use": "@vercel/static" },
-    { "src": "api/analyze.js", "use": "@vercel/node" }
+    { "src": "api/analyze.js", "use": "@vercel/node" },
+    { "src": "api/plantnet.js", "use": "@vercel/node" }
   ],
   "routes": [
     { "src": "/api/analyze", "dest": "/api/analyze.js" },
+    { "src": "/api/plantnet", "dest": "/api/plantnet.js" },
     { "src": "/(.*)", "dest": "/index.html" }
   ]
 }
