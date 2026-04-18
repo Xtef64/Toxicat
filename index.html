@@ -1013,19 +1013,11 @@ async function doAnalyze() {
     // ── STEP 2: Photo → Pl@ntNet identification (gratuit) ──
     if (imgBase64) {
       try {
-        // Appel via proxy Vercel (server-to-server, pas de CORS)
-        const byteStr = atob(imgBase64);
-        const ab = new ArrayBuffer(byteStr.length);
-        const ia = new Uint8Array(ab);
-        for (let i = 0; i < byteStr.length; i++) ia[i] = byteStr.charCodeAt(i);
-        const blob = new Blob([ab], { type: imgMime || 'image/jpeg' });
-        const form = new FormData();
-        form.append('organs', 'auto');
-        form.append('images', blob, 'plant.jpg');
-
+        // Envoie base64 en JSON au proxy Vercel
         const plantnetResp = await fetch('/api/plantnet', {
           method: 'POST',
-          body: form
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ imageBase64: imgBase64, mimeType: imgMime || 'image/jpeg' })
         });
 
         if (plantnetResp.ok) {
@@ -1088,6 +1080,12 @@ async function doAnalyze() {
         }
       } catch(plantnetErr) {
         console.warn('Pl@ntNet error:', plantnetErr);
+        setResult(`<div class="error-card"><div class="error-icon">🔧</div><div>
+          <div class="error-title">Erreur proxy</div>
+          <div class="error-msg">${plantnetErr.message}</div>
+        </div></div>`);
+        document.getElementById('btnAnalyze').disabled = false;
+        return;
       }
 
       // Pl@ntNet failed or no result → show friendly message
