@@ -1,54 +1,88 @@
-// api/plantnet.js - Proxy PlantNet pour ToxiCat
+// api/plantnet.js — Proxy PlantNet avec Origin spoofing
 const PLANTNET_KEY = process.env.PLANTNET_KEY || '2b106tJxkhFKun8WbpsU2BVjfO';
 
 module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   try {
-    // req.body is auto-parsed JSON by Vercel
     const { imageBase64, mimeType } = req.body || {};
+    if (!imageBase64) return res.status(400).json({ error: 'No image provided' });
 
-    if (!imageBase64) {
-      return res.status(400).json({ error: 'No imageBase64 in request body' });
-    }
-
-    // Convert base64 to Buffer then to Blob
+    // Build raw multipart body
     const buffer = Buffer.from(imageBase64, 'base64');
-    const blob = new Blob([buffer], { type: mimeType || 'image/jpeg' });
+    const boundary = '----ToxiCatProxy' + Date.now();
+    const CRLF = '\r\n';
+    const body = Buffer.concat([
+      Buffer.from(`--${boundary}${CRLF}Content-Disposition: form-data; name="organs"${CRLF}${CRLF}auto${CRLF}`, 'utf8'),
+      Buffer.from(`--${boundary}${CRLF}Content-Disposition: form-data; name="images"; filename="plant.jpg"${CRLF}Content-Type: ${mimeType || 'image/jpeg'}${CRLF}${CRLF}`, 'utf8'),
+      buffer,
+      Buffer.from(`${CRLF}--${boundary}--${CRLF}`, 'utf8'),
+    ]);
 
-    // Build FormData with native Node 18 API
-    const form = new FormData();
-    form.append('organs', 'auto');
-    form.append('images', blob, 'plant.jpg');
-
-    // Call PlantNet
-    const plantnetResp = await fetch(
+    // Essai 1 : Origin = https://toxicat.vercel.app (avec https)
+    let resp = await fetch(
       `https://my-api.plantnet.org/v2/identify/all?lang=fr&nb-results=5&api-key=${PLANTNET_KEY}`,
-      { method: 'POST', body: form }
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': `multipart/form-data; boundary=${boundary}`,
+          'Origin': 'https://toxicat.vercel.app',
+          'Referer': 'https://toxicat.vercel.app/',
+          'User-Agent': 'Mozilla/5.0 ToxiCat/1.0',
+        },
+        body,
+      }
     );
 
-    const text = await plantnetResp.text();
-    console.log('PlantNet status:', plantnetResp.status);
-    console.log('PlantNet response:', text.slice(0, 300));
-
-    if (!plantnetResp.ok) {
-      return res.status(plantnetResp.status).json({ 
-        error: `PlantNet error ${plantnetResp.status}: ${text}` 
-      });
+    // Essai 2 si 403 : Origin sans https
+    if (resp.status === 403) {
+      resp = await fetch(
+        `https://my-api.plantnet.org/v2/identify/all?lang=fr&nb-results=5&api-key=${PLANTNET_KEY}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': `multipart/form-data; boundary=${boundary}`,
+            'Origin': 'toxicat.vercel.app',
+            'Referer': 'https://toxicat.vercel.app/',
+            'User-Agent': 'Mozilla/5.0 ToxiCat/1.0',
+          },
+          body,
+        }
+      );
     }
 
-    const data = JSON.parse(text);
-    return res.status(200).json(data);
+    // Essai 3 si encore 403 : sans Origin du tout
+    if (resp.status === 403) {
+      resp = await fetch(
+        `https://my-api.plantnet.org/v2/identify/all?lang=fr&nb-results=5&api-key=${PLANTNET_KEY}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': `multipart/form-data; boundary=${boundary}`,
+            'User-Agent': 'PlantNet-App/1.0',
+          },
+          body,
+        }
+      );
+    }
 
+    const text = await resp.text();
+    console.log(`PlantNet → ${resp.status}: ${text.slice(0, 200)}`);
+
+    try {
+      return res.status(resp.status).json(JSON.parse(text));
+    } catch {
+      return res.status(resp.status).send(text);
+    }
   } catch (err) {
     console.error('Proxy error:', err.message);
-    return res.status(500).json({ error: `Proxy error: ${err.message}` });
+    return res.status(500).json({ error: err.message });
   }
 };
+
 
 
