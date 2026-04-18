@@ -1020,6 +1020,18 @@ async function doAnalyze() {
           body: JSON.stringify({ imageBase64: imgBase64, mimeType: imgMime || 'image/jpeg' })
         });
 
+        // Afficher l'erreur réelle si le proxy échoue
+        if (!plantnetResp.ok) {
+          const errData = await plantnetResp.json().catch(() => ({}));
+          const errMsg = errData.error || `HTTP ${plantnetResp.status}`;
+          setResult(`<div class="error-card"><div class="error-icon">🔧</div><div>
+            <div class="error-title">Erreur PlantNet (${plantnetResp.status})</div>
+            <div class="error-msg">${errMsg}</div>
+          </div></div>`);
+          document.getElementById('btnAnalyze').disabled = false;
+          return;
+        }
+
         if (plantnetResp.ok) {
           const plantnetData = await plantnetResp.json();
           const results = plantnetData.results || [];
@@ -1370,6 +1382,7 @@ function dbToResult(plant, lang) {
 </script>
 </body>
 </html>
+
 
 
 
