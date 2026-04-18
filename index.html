@@ -1,9 +1,3 @@
-
-
-
-
-
-
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -1019,21 +1013,12 @@ async function doAnalyze() {
     // ── STEP 2: Photo → Pl@ntNet identification (gratuit) ──
     if (imgBase64) {
       try {
-        // Convert base64 to blob for FormData
-        const byteStr = atob(imgBase64);
-        const ab = new ArrayBuffer(byteStr.length);
-        const ia = new Uint8Array(ab);
-        for (let i = 0; i < byteStr.length; i++) ia[i] = byteStr.charCodeAt(i);
-        const blob = new Blob([ab], { type: imgMime });
-
-        const form = new FormData();
-        form.append('organs', 'auto');
-        form.append('images', blob, 'plant.jpg');
-
-        const plantnetResp = await fetch(
-          'https://my-api.plantnet.org/v2/identify/all?lang=fr&nb-results=3&api-key=2b106tJxkhFKun8WbpsU2BVjfO',
-          { method: 'POST', body: form }
-        );
+        // Appel via proxy Vercel — envoie base64 JSON
+        const plantnetResp = await fetch('/api/plantnet', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ imageBase64: imgBase64, mimeType: imgMime })
+        });
 
         if (plantnetResp.ok) {
           const plantnetData = await plantnetResp.json();
@@ -1379,3 +1364,4 @@ function dbToResult(plant, lang) {
 </script>
 </body>
 </html>
+
